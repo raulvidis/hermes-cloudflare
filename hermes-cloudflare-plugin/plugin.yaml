@@ -1,0 +1,16 @@
+name: hermes-cloudflare
+version: 1.0.0
+description: "Cloudflare Browser Rendering API - crawl, scrape, extract markdown/JSON/links/screenshots/PDFs from web pages"
+author: raulvidis
+requires_env:
+  - CLOUDFLARE_API_TOKEN
+  - CLOUDFLARE_ACCOUNT_ID
+provides_tools:
+  - cf_crawl
+  - cf_scrape
+  - cf_markdown
+  - cf_json_extract
+  - cf_links
+  - cf_content
+  - cf_screenshot
+  - cf_pdf
