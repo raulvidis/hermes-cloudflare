@@ -38,37 +38,18 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.cloudflare.com/client/v4/accounts"
 
 
-def _load_cf_config() -> dict:
-    """Load cloudflare section from ~/.hermes/config.yaml as fallback."""
-    try:
-        from hermes_cli.config import load_config
-        return load_config().get("cloudflare", {})
-    except (ImportError, Exception):
-        return {}
-
-
-def _get_token() -> str:
-    """Resolve API token from env var or config.yaml."""
-    return os.getenv("CLOUDFLARE_API_TOKEN", "") or _load_cf_config().get("api_token", "")
-
-
-def _get_account_id() -> str:
-    """Resolve account ID from env var or config.yaml."""
-    return os.getenv("CLOUDFLARE_ACCOUNT_ID", "") or _load_cf_config().get("account_id", "")
-
-
 def _check_available() -> bool:
-    return bool(_get_token() and _get_account_id())
+    return bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"))
 
 
 def _api_url(endpoint: str) -> str:
-    account_id = _get_account_id()
+    account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
     return f"{_BASE}/{account_id}/browser-rendering/{endpoint}"
 
 
 def _headers() -> dict:
     return {
-        "Authorization": f"Bearer {_get_token()}",
+        "Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}",
         "Content-Type": "application/json",
     }
 
