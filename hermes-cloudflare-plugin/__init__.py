@@ -175,7 +175,7 @@ def handle_cf_crawl(args: dict, **kw) -> str:
     elif action == "cancel":
         job_id = args.get("job_id", "")
         result = _delete(f"crawl/{job_id}")
-        return json.dumps(result, indent=2)
+        return _limit_response_size(json.dumps(result, indent=2))
 
     return json.dumps({"error": f"Unknown action: {action}"})
 
@@ -215,7 +215,7 @@ def handle_cf_json_extract(args: dict, **kw) -> str:
         payload["response_format"] = args["response_format"]
     payload.update(_build_common_opts(args))
     result = _post("json", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_links(args: dict, **kw) -> str:
@@ -227,7 +227,7 @@ def handle_cf_links(args: dict, **kw) -> str:
         payload["excludeExternalLinks"] = args["exclude_external"]
     payload.update(_build_common_opts(args))
     result = _post("links", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_content(args: dict, **kw) -> str:
@@ -262,7 +262,7 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
         payload["selector"] = args["selector"]
     payload.update(_build_common_opts(args))
     result = _post("screenshot", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_pdf(args: dict, **kw) -> str:
@@ -278,7 +278,7 @@ def handle_cf_pdf(args: dict, **kw) -> str:
         payload["footerTemplate"] = args["footer_template"]
     payload.update(_build_common_opts(args))
     result = _post("pdf", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------
