@@ -39,7 +39,9 @@ _BASE = "https://api.cloudflare.com/client/v4/accounts"
 
 
 def _check_available() -> bool:
-    return bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID"))
+    return bool(
+        os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    )
 
 
 def _api_url(endpoint: str) -> str:
@@ -66,10 +68,16 @@ def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
             return resp.json()
         # Binary responses (screenshot, pdf) – return base64
         import base64
-        return {"success": True, "result_base64": base64.b64encode(resp.content).decode()}
+
+        return {
+            "success": True,
+            "result_base64": base64.b64encode(resp.content).decode(),
+        }
 
 
-def _get(endpoint: str, params: Optional[dict] = None, *, timeout: float = 60.0) -> dict:
+def _get(
+    endpoint: str, params: Optional[dict] = None, *, timeout: float = 60.0
+) -> dict:
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
     with httpx.Client(timeout=timeout) as client:
@@ -105,9 +113,20 @@ def _build_common_opts(args: dict) -> dict:
     return opts
 
 
-# ---------------------------------------------------------------------------
-# Tool handlers
-# ---------------------------------------------------------------------------
+def _limit_response_size(text: str, max_chars: int = 50000) -> str:
+    """Truncate large responses to prevent context overflow."""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    head = text[:half]
+    tail = text[-half:]
+    omitted = len(text) - max_chars
+    notice = (
+        f"\n... [TRUNCATED: {len(text):,} chars total, {omitted:,} chars omitted] ...\n"
+        f"[TIP: Use cf_scrape with specific selectors for targeted extraction]\n"
+    )
+    return head + notice + tail
+
 
 def handle_cf_crawl(args: dict, **kw) -> str:
     """Start an async crawl job or check status / cancel an existing one."""
@@ -126,14 +145,20 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         if args.get("source"):
             payload["source"] = args["source"]
         if args.get("include_patterns"):
-            payload.setdefault("options", {})["includePatterns"] = args["include_patterns"]
+            payload.setdefault("options", {})["includePatterns"] = args[
+                "include_patterns"
+            ]
         if args.get("exclude_patterns"):
-            payload.setdefault("options", {})["excludePatterns"] = args["exclude_patterns"]
+            payload.setdefault("options", {})["excludePatterns"] = args[
+                "exclude_patterns"
+            ]
         if args.get("include_subdomains"):
-            payload.setdefault("options", {})["includeSubdomains"] = args["include_subdomains"]
+            payload.setdefault("options", {})["includeSubdomains"] = args[
+                "include_subdomains"
+            ]
         payload.update(_build_common_opts(args))
         result = _post("crawl", payload, timeout=120.0)
-        return json.dumps(result, indent=2)
+        return _limit_response_size(json.dumps(result, indent=2))
 
     elif action == "status":
         job_id = args.get("job_id", "")
@@ -145,7 +170,7 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         if args.get("status_filter"):
             params["status"] = args["status_filter"]
         result = _get(f"crawl/{job_id}", params=params)
-        return json.dumps(result, indent=2)
+        return _limit_response_size(json.dumps(result, indent=2))
 
     elif action == "cancel":
         job_id = args.get("job_id", "")
@@ -162,7 +187,7 @@ def handle_cf_scrape(args: dict, **kw) -> str:
     payload: Dict[str, Any] = {"url": args["url"], "elements": elements}
     payload.update(_build_common_opts(args))
     result = _post("scrape", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_markdown(args: dict, **kw) -> str:
@@ -174,7 +199,7 @@ def handle_cf_markdown(args: dict, **kw) -> str:
         payload["html"] = args["html"]
     payload.update(_build_common_opts(args))
     result = _post("markdown", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_json_extract(args: dict, **kw) -> str:
@@ -214,7 +239,7 @@ def handle_cf_content(args: dict, **kw) -> str:
         payload["html"] = args["html"]
     payload.update(_build_common_opts(args))
     result = _post("content", payload)
-    return json.dumps(result, indent=2)
+    return _limit_response_size(json.dumps(result, indent=2))
 
 
 def handle_cf_screenshot(args: dict, **kw) -> str:
@@ -279,76 +304,97 @@ TOOLS = [
                     "action": {
                         "type": "string",
                         "enum": ["start", "status", "cancel"],
-                        "description": "start=begin crawl, status=poll results, cancel=stop job"
+                        "description": "start=begin crawl, status=poll results, cancel=stop job",
                     },
                     "url": {
                         "type": "string",
-                        "description": "Starting URL to crawl (required for action=start)"
+                        "description": "Starting URL to crawl (required for action=start)",
                     },
                     "job_id": {
                         "type": "string",
-                        "description": "Job ID returned by start (required for status/cancel)"
+                        "description": "Job ID returned by start (required for status/cancel)",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max pages to crawl (start) or max records to return (status). Default: 10"
+                        "description": "Max pages to crawl (start) or max records to return (status). Default: 10",
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "Max link depth from starting URL"
+                        "description": "Max link depth from starting URL",
                     },
                     "formats": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["html", "markdown", "json"]},
-                        "description": "Output formats. Default: ['html']"
+                        "items": {
+                            "type": "string",
+                            "enum": ["html", "markdown", "json"],
+                        },
+                        "description": "Output formats. Default: ['html']",
                     },
                     "render": {
                         "type": "boolean",
-                        "description": "Execute JS with headless browser. Set false for static HTML (faster)"
+                        "description": "Execute JS with headless browser. Set false for static HTML (faster)",
                     },
                     "source": {
                         "type": "string",
                         "enum": ["all", "sitemaps", "links"],
-                        "description": "URL discovery source. Default: 'all'"
+                        "description": "URL discovery source. Default: 'all'",
                     },
                     "include_patterns": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Wildcard patterns to include (e.g. '/blog/*')"
+                        "description": "Wildcard patterns to include (e.g. '/blog/*')",
                     },
                     "exclude_patterns": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Wildcard patterns to exclude"
+                        "description": "Wildcard patterns to exclude",
                     },
                     "include_subdomains": {
                         "type": "boolean",
-                        "description": "Follow links to subdomains"
+                        "description": "Follow links to subdomains",
                     },
                     "cursor": {
                         "type": "string",
-                        "description": "Pagination cursor for status polling"
+                        "description": "Pagination cursor for status polling",
                     },
                     "status_filter": {
                         "type": "string",
-                        "enum": ["queued", "completed", "disallowed", "skipped", "errored", "cancelled"],
-                        "description": "Filter results by page status"
+                        "enum": [
+                            "queued",
+                            "completed",
+                            "disallowed",
+                            "skipped",
+                            "errored",
+                            "cancelled",
+                        ],
+                        "description": "Filter results by page status",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"],
-                        "description": "Page load condition"
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
+                        "description": "Page load condition",
                     },
-                    "user_agent": {"type": "string", "description": "Custom user-agent string"},
-                    "wait_for_selector": {"type": "string", "description": "CSS selector to wait for before processing"},
+                    "user_agent": {
+                        "type": "string",
+                        "description": "Custom user-agent string",
+                    },
+                    "wait_for_selector": {
+                        "type": "string",
+                        "description": "CSS selector to wait for before processing",
+                    },
                     "reject_resource_types": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Block resource types: image, media, font, stylesheet"
-                    }
+                        "description": "Block resource types: image, media, font, stylesheet",
+                    },
                 },
-                "required": ["action"]
-            }
+                "required": ["action"],
+            },
         },
         "handler": handle_cf_crawl,
         "description": "Crawl entire websites via Cloudflare Browser Rendering",
@@ -366,22 +412,36 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL of the page to scrape"},
+                    "url": {
+                        "type": "string",
+                        "description": "URL of the page to scrape",
+                    },
                     "selectors": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "CSS selectors to extract (e.g. ['h1', '.price', '#main'])"
+                        "description": "CSS selectors to extract (e.g. ['h1', '.price', '#main'])",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"],
-                        "description": "Page load condition (use networkidle0 for SPAs)"
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
+                        "description": "Page load condition (use networkidle0 for SPAs)",
                     },
-                    "user_agent": {"type": "string", "description": "Custom user-agent string"},
-                    "wait_for_selector": {"type": "string", "description": "CSS selector to wait for before scraping"}
+                    "user_agent": {
+                        "type": "string",
+                        "description": "Custom user-agent string",
+                    },
+                    "wait_for_selector": {
+                        "type": "string",
+                        "description": "CSS selector to wait for before scraping",
+                    },
                 },
-                "required": ["url", "selectors"]
-            }
+                "required": ["url", "selectors"],
+            },
         },
         "handler": handle_cf_scrape,
         "description": "Scrape HTML elements from web pages with CSS selectors",
@@ -399,22 +459,33 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to convert to Markdown"},
-                    "html": {"type": "string", "description": "Raw HTML to convert (alternative to url)"},
+                    "url": {
+                        "type": "string",
+                        "description": "URL to convert to Markdown",
+                    },
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML to convert (alternative to url)",
+                    },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
                     "reject_resource_types": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Block resource types to speed up rendering"
-                    }
+                        "description": "Block resource types to speed up rendering",
+                    },
                 },
-                "required": []
-            }
+                "required": [],
+            },
         },
         "handler": handle_cf_markdown,
         "description": "Convert web pages to clean Markdown",
@@ -432,25 +503,36 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to extract data from"},
-                    "html": {"type": "string", "description": "Raw HTML (alternative to url)"},
+                    "url": {
+                        "type": "string",
+                        "description": "URL to extract data from",
+                    },
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML (alternative to url)",
+                    },
                     "prompt": {
                         "type": "string",
-                        "description": "Natural language instruction for what to extract (e.g. 'Extract all product names and prices')"
+                        "description": "Natural language instruction for what to extract (e.g. 'Extract all product names and prices')",
                     },
                     "response_format": {
                         "type": "object",
-                        "description": "JSON schema defining expected output structure"
+                        "description": "JSON schema defining expected output structure",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
                     "user_agent": {"type": "string"},
-                    "wait_for_selector": {"type": "string"}
+                    "wait_for_selector": {"type": "string"},
                 },
-                "required": []
-            }
+                "required": [],
+            },
         },
         "handler": handle_cf_json_extract,
         "description": "AI-powered structured data extraction from web pages",
@@ -467,23 +549,31 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to extract links from"},
+                    "url": {
+                        "type": "string",
+                        "description": "URL to extract links from",
+                    },
                     "visible_only": {
                         "type": "boolean",
-                        "description": "Only return links visible to users. Default: false"
+                        "description": "Only return links visible to users. Default: false",
                     },
                     "exclude_external": {
                         "type": "boolean",
-                        "description": "Exclude links to external domains. Default: false"
+                        "description": "Exclude links to external domains. Default: false",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
-                    "user_agent": {"type": "string"}
+                    "user_agent": {"type": "string"},
                 },
-                "required": ["url"]
-            }
+                "required": ["url"],
+            },
         },
         "handler": handle_cf_links,
         "description": "Extract links from web pages",
@@ -501,24 +591,32 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "URL to render"},
-                    "html": {"type": "string", "description": "Raw HTML to render (alternative to url)"},
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML to render (alternative to url)",
+                    },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
                     "reject_resource_types": {
                         "type": "array",
-                        "items": {"type": "string"}
+                        "items": {"type": "string"},
                     },
                     "extra_headers": {
                         "type": "object",
-                        "description": "Additional HTTP headers to send"
-                    }
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
-                "required": []
-            }
+                "required": [],
+            },
         },
         "handler": handle_cf_content,
         "description": "Get fully rendered HTML after JS execution",
@@ -539,43 +637,48 @@ TOOLS = [
                     "url": {"type": "string", "description": "URL to screenshot"},
                     "full_page": {
                         "type": "boolean",
-                        "description": "Capture the full scrollable page. Default: false"
+                        "description": "Capture the full scrollable page. Default: false",
                     },
                     "image_type": {
                         "type": "string",
                         "enum": ["png", "jpeg", "webp"],
-                        "description": "Image format. Default: png"
+                        "description": "Image format. Default: png",
                     },
                     "quality": {
                         "type": "integer",
-                        "description": "JPEG/WebP quality (0-100)"
+                        "description": "JPEG/WebP quality (0-100)",
                     },
                     "omit_background": {
                         "type": "boolean",
-                        "description": "Transparent background. Default: false"
+                        "description": "Transparent background. Default: false",
                     },
                     "selector": {
                         "type": "string",
-                        "description": "CSS selector to screenshot a specific element"
+                        "description": "CSS selector to screenshot a specific element",
                     },
                     "viewport": {
                         "type": "object",
                         "properties": {
                             "width": {"type": "integer"},
                             "height": {"type": "integer"},
-                            "deviceScaleFactor": {"type": "number"}
+                            "deviceScaleFactor": {"type": "number"},
                         },
-                        "description": "Viewport dimensions"
+                        "description": "Viewport dimensions",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
                     "user_agent": {"type": "string"},
-                    "wait_for_selector": {"type": "string"}
+                    "wait_for_selector": {"type": "string"},
                 },
-                "required": ["url"]
-            }
+                "required": ["url"],
+            },
         },
         "handler": handle_cf_screenshot,
         "description": "Take screenshots of web pages",
@@ -596,36 +699,41 @@ TOOLS = [
                     "url": {"type": "string", "description": "URL to render as PDF"},
                     "pdf_options": {
                         "type": "object",
-                        "description": "PDF settings: format, margins, scale, landscape, etc."
+                        "description": "PDF settings: format, margins, scale, landscape, etc.",
                     },
                     "viewport": {
                         "type": "object",
                         "properties": {
                             "width": {"type": "integer"},
-                            "height": {"type": "integer"}
-                        }
+                            "height": {"type": "integer"},
+                        },
                     },
                     "header_template": {
                         "type": "string",
-                        "description": "HTML template for page headers"
+                        "description": "HTML template for page headers",
                     },
                     "footer_template": {
                         "type": "string",
-                        "description": "HTML template for page footers"
+                        "description": "HTML template for page footers",
                     },
                     "wait_until": {
                         "type": "string",
-                        "enum": ["networkidle0", "networkidle2", "load", "domcontentloaded"]
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
                     "reject_resource_types": {
                         "type": "array",
-                        "items": {"type": "string"}
-                    }
+                        "items": {"type": "string"},
+                    },
                 },
-                "required": ["url"]
-            }
+                "required": ["url"],
+            },
         },
         "handler": handle_cf_pdf,
         "description": "Render web pages as PDF documents",
@@ -637,6 +745,7 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 # Plugin entry point
 # ---------------------------------------------------------------------------
+
 
 def register(ctx):
     """Register all Cloudflare Browser Rendering tools."""
