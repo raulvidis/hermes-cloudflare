@@ -77,6 +77,9 @@ def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
     except httpx.HTTPStatusError as exc:
         logger.warning("Cloudflare API error on POST %s: %s", endpoint, exc)
         return {"error": f"Cloudflare API returned {exc.response.status_code}: {exc.response.text[:500]}"}
+    except httpx.RequestError as exc:
+        logger.warning("Cloudflare network error on POST %s: %s", endpoint, exc)
+        return {"error": f"Network error contacting Cloudflare: {exc}"}
 
 
 def _get(
@@ -92,6 +95,9 @@ def _get(
     except httpx.HTTPStatusError as exc:
         logger.warning("Cloudflare API error on GET %s: %s", endpoint, exc)
         return {"error": f"Cloudflare API returned {exc.response.status_code}: {exc.response.text[:500]}"}
+    except httpx.RequestError as exc:
+        logger.warning("Cloudflare network error on GET %s: %s", endpoint, exc)
+        return {"error": f"Network error contacting Cloudflare: {exc}"}
 
 
 def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
@@ -105,6 +111,9 @@ def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
     except httpx.HTTPStatusError as exc:
         logger.warning("Cloudflare API error on DELETE %s: %s", endpoint, exc)
         return {"error": f"Cloudflare API returned {exc.response.status_code}: {exc.response.text[:500]}"}
+    except httpx.RequestError as exc:
+        logger.warning("Cloudflare network error on DELETE %s: %s", endpoint, exc)
+        return {"error": f"Network error contacting Cloudflare: {exc}"}
 
 
 def _build_common_opts(args: dict) -> dict:
