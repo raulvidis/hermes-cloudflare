@@ -45,13 +45,18 @@ def _check_available() -> bool:
 
 
 def _api_url(endpoint: str) -> str:
-    account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not account_id:
+        raise ValueError("CLOUDFLARE_ACCOUNT_ID environment variable is not set")
     return f"{_BASE}/{account_id}/browser-rendering/{endpoint}"
 
 
 def _headers() -> dict:
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise ValueError("CLOUDFLARE_API_TOKEN environment variable is not set")
     return {
-        "Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
@@ -60,19 +65,31 @@ def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
     """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(_api_url(endpoint), headers=_headers(), json=payload)
-        resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
-        if "application/json" in content_type:
-            return resp.json()
-        # Binary responses (screenshot, pdf) – return base64
-        import base64
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(_api_url(endpoint), headers=_headers(), json=payload)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return resp.json()
+            # Binary responses (screenshot, pdf) – return base64
+            import base64
 
+            return {
+                "success": True,
+                "result_base64": base64.b64encode(resp.content).decode(),
+            }
+    except httpx.HTTPStatusError as exc:
+        logger.error("Cloudflare API error on POST %s: %s", endpoint, exc)
         return {
-            "success": True,
-            "result_base64": base64.b64encode(resp.content).decode(),
+            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
+            "detail": exc.response.text[:500],
         }
+    except httpx.RequestError as exc:
+        logger.error("Cloudflare request failed on POST %s: %s", endpoint, exc)
+        return {"error": f"Request to Cloudflare API failed: {exc}"}
 
 
 def _get(
@@ -80,19 +97,43 @@ def _get(
 ) -> dict:
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.get(_api_url(endpoint), headers=_headers(), params=params)
-        resp.raise_for_status()
-        return resp.json()
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(_api_url(endpoint), headers=_headers(), params=params)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error("Cloudflare API error on GET %s: %s", endpoint, exc)
+        return {
+            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
+            "detail": exc.response.text[:500],
+        }
+    except httpx.RequestError as exc:
+        logger.error("Cloudflare request failed on GET %s: %s", endpoint, exc)
+        return {"error": f"Request to Cloudflare API failed: {exc}"}
 
 
 def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.delete(_api_url(endpoint), headers=_headers())
-        resp.raise_for_status()
-        return resp.json()
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.delete(_api_url(endpoint), headers=_headers())
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error("Cloudflare API error on DELETE %s: %s", endpoint, exc)
+        return {
+            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
+            "detail": exc.response.text[:500],
+        }
+    except httpx.RequestError as exc:
+        logger.error("Cloudflare request failed on DELETE %s: %s", endpoint, exc)
+        return {"error": f"Request to Cloudflare API failed: {exc}"}
 
 
 def _build_common_opts(args: dict) -> dict:
