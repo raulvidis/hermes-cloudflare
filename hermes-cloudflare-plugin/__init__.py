@@ -45,13 +45,18 @@ def _check_available() -> bool:
 
 
 def _api_url(endpoint: str) -> str:
-    account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not account_id:
+        raise ValueError("CLOUDFLARE_ACCOUNT_ID environment variable is not set")
     return f"{_BASE}/{account_id}/browser-rendering/{endpoint}"
 
 
 def _headers() -> dict:
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise ValueError("CLOUDFLARE_API_TOKEN environment variable is not set")
     return {
-        "Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
@@ -60,6 +65,8 @@ def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
     """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(_api_url(endpoint), headers=_headers(), json=payload)
         resp.raise_for_status()
@@ -80,6 +87,8 @@ def _get(
 ) -> dict:
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
     with httpx.Client(timeout=timeout) as client:
         resp = client.get(_api_url(endpoint), headers=_headers(), params=params)
         resp.raise_for_status()
@@ -89,6 +98,8 @@ def _get(
 def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
+    if not _check_available():
+        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
     with httpx.Client(timeout=timeout) as client:
         resp = client.delete(_api_url(endpoint), headers=_headers())
         resp.raise_for_status()
@@ -192,6 +203,8 @@ def handle_cf_scrape(args: dict, **kw) -> str:
 
 def handle_cf_markdown(args: dict, **kw) -> str:
     """Convert a web page to clean Markdown."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
@@ -204,6 +217,8 @@ def handle_cf_markdown(args: dict, **kw) -> str:
 
 def handle_cf_json_extract(args: dict, **kw) -> str:
     """Extract structured JSON data from a page using AI."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
@@ -232,6 +247,8 @@ def handle_cf_links(args: dict, **kw) -> str:
 
 def handle_cf_content(args: dict, **kw) -> str:
     """Get fully rendered HTML content of a page (after JS execution)."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
