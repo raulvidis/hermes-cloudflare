@@ -233,6 +233,8 @@ def handle_cf_scrape(args: dict, **kw) -> str:
 
 def handle_cf_markdown(args: dict, **kw) -> str:
     """Convert a web page to clean Markdown."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
@@ -245,6 +247,8 @@ def handle_cf_markdown(args: dict, **kw) -> str:
 
 def handle_cf_json_extract(args: dict, **kw) -> str:
     """Extract structured JSON data from a page using AI."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
@@ -273,6 +277,8 @@ def handle_cf_links(args: dict, **kw) -> str:
 
 def handle_cf_content(args: dict, **kw) -> str:
     """Get fully rendered HTML content of a page (after JS execution)."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
         payload["url"] = args["url"]
