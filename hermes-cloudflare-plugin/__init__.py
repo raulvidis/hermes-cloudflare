@@ -103,7 +103,13 @@ def _get(
         with httpx.Client(timeout=timeout) as client:
             resp = client.get(_api_url(endpoint), headers=_headers(), params=params)
             resp.raise_for_status()
-            return resp.json()
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return resp.json()
+            return {
+                "error": f"Unexpected content-type from GET {endpoint}: {content_type}",
+                "raw": resp.text[:1000],
+            }
     except httpx.HTTPStatusError as exc:
         logger.error("Cloudflare API error on GET %s: %s", endpoint, exc)
         return {
@@ -124,7 +130,13 @@ def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
         with httpx.Client(timeout=timeout) as client:
             resp = client.delete(_api_url(endpoint), headers=_headers())
             resp.raise_for_status()
-            return resp.json()
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return resp.json()
+            return {
+                "error": f"Unexpected content-type from DELETE {endpoint}: {content_type}",
+                "raw": resp.text[:1000],
+            }
     except httpx.HTTPStatusError as exc:
         logger.error("Cloudflare API error on DELETE %s: %s", endpoint, exc)
         return {
