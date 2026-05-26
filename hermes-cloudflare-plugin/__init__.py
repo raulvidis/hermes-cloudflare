@@ -19,6 +19,7 @@ Requires:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -61,91 +62,82 @@ def _headers() -> dict:
     }
 
 
-def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
-    """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
+def _request(
+    method: str,
+    endpoint: str,
+    *,
+    timeout: float = 60.0,
+    binary_ok: bool = False,
+    **kwargs: Any,
+) -> dict:
+    """Send an HTTP request to a Cloudflare Browser Rendering endpoint.
+
+    Args:
+        method: HTTP method ('get', 'post', 'delete').
+        endpoint: API endpoint path (e.g. 'crawl').
+        timeout: Request timeout in seconds.
+        binary_ok: If True, non-JSON responses are base64-encoded instead of
+            causing an error.
+        **kwargs: Forwarded to the httpx method (e.g. json=, params=).
+
+    Returns:
+        Parsed JSON dict, or an error dict on failure.
+    """
     if httpx is None:
         return {"error": "httpx is not installed. Run: pip install httpx"}
     if not _check_available():
-        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
+        return {
+            "error": (
+                "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID "
+                "environment variables"
+            )
+        }
     try:
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(_api_url(endpoint), headers=_headers(), json=payload)
+            resp = getattr(client, method)(
+                _api_url(endpoint), headers=_headers(), **kwargs
+            )
             resp.raise_for_status()
             content_type = resp.headers.get("content-type", "")
             if "application/json" in content_type:
                 return resp.json()
-            # Binary responses (screenshot, pdf) – return base64
-            import base64
-
-            return {
-                "success": True,
-                "result_base64": base64.b64encode(resp.content).decode(),
-            }
+            if binary_ok:
+                return {
+                    "success": True,
+                    "result_base64": base64.b64encode(resp.content).decode(),
+                }
+            # Non-JSON, non-binary response — try parsing, return raw on failure
+            try:
+                return resp.json()
+            except Exception:
+                return {
+                    "error": f"Unexpected content-type from {method.upper()} {endpoint}: {content_type}",
+                    "raw": resp.text[:1000],
+                }
     except httpx.HTTPStatusError as exc:
-        logger.error("Cloudflare API error on POST %s: %s", endpoint, exc)
+        logger.error("Cloudflare API error on %s %s: %s", method.upper(), endpoint, exc)
         return {
             "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
             "detail": exc.response.text[:500],
         }
     except httpx.RequestError as exc:
-        logger.error("Cloudflare request failed on POST %s: %s", endpoint, exc)
+        logger.error("Cloudflare request failed on %s %s: %s", method.upper(), endpoint, exc)
         return {"error": f"Request to Cloudflare API failed: {exc}"}
+
+
+def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
+    """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
+    return _request("post", endpoint, json=payload, timeout=timeout, binary_ok=True)
 
 
 def _get(
     endpoint: str, params: Optional[dict] = None, *, timeout: float = 60.0
 ) -> dict:
-    if httpx is None:
-        return {"error": "httpx is not installed. Run: pip install httpx"}
-    if not _check_available():
-        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(_api_url(endpoint), headers=_headers(), params=params)
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "application/json" in content_type:
-                return resp.json()
-            return {
-                "error": f"Unexpected content-type from GET {endpoint}: {content_type}",
-                "raw": resp.text[:1000],
-            }
-    except httpx.HTTPStatusError as exc:
-        logger.error("Cloudflare API error on GET %s: %s", endpoint, exc)
-        return {
-            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
-            "detail": exc.response.text[:500],
-        }
-    except httpx.RequestError as exc:
-        logger.error("Cloudflare request failed on GET %s: %s", endpoint, exc)
-        return {"error": f"Request to Cloudflare API failed: {exc}"}
+    return _request("get", endpoint, params=params, timeout=timeout)
 
 
 def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
-    if httpx is None:
-        return {"error": "httpx is not installed. Run: pip install httpx"}
-    if not _check_available():
-        return {"error": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables"}
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.delete(_api_url(endpoint), headers=_headers())
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "application/json" in content_type:
-                return resp.json()
-            return {
-                "error": f"Unexpected content-type from DELETE {endpoint}: {content_type}",
-                "raw": resp.text[:1000],
-            }
-    except httpx.HTTPStatusError as exc:
-        logger.error("Cloudflare API error on DELETE %s: %s", endpoint, exc)
-        return {
-            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
-            "detail": exc.response.text[:500],
-        }
-    except httpx.RequestError as exc:
-        logger.error("Cloudflare request failed on DELETE %s: %s", endpoint, exc)
-        return {"error": f"Request to Cloudflare API failed: {exc}"}
+    return _request("delete", endpoint, timeout=timeout)
 
 
 def _build_common_opts(args: dict) -> dict:
