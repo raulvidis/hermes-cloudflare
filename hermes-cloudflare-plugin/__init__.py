@@ -186,7 +186,10 @@ def handle_cf_crawl(args: dict, **kw) -> str:
     action = args.get("action", "start")
 
     if action == "start":
-        payload: Dict[str, Any] = {"url": args["url"]}
+        url = args.get("url")
+        if not url:
+            return json.dumps({"error": "'url' is required for action=start"})
+        payload: Dict[str, Any] = {"url": url}
         if args.get("limit"):
             payload["limit"] = args["limit"]
         if args.get("depth"):
@@ -214,7 +217,9 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         return _limit_response_size(json.dumps(result, indent=2))
 
     elif action == "status":
-        job_id = args.get("job_id", "")
+        job_id = args.get("job_id")
+        if not job_id:
+            return json.dumps({"error": "'job_id' is required for action=status"})
         params: Dict[str, Any] = {}
         if args.get("limit"):
             params["limit"] = args["limit"]
@@ -226,7 +231,9 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         return _limit_response_size(json.dumps(result, indent=2))
 
     elif action == "cancel":
-        job_id = args.get("job_id", "")
+        job_id = args.get("job_id")
+        if not job_id:
+            return json.dumps({"error": "'job_id' is required for action=cancel"})
         result = _delete(f"crawl/{job_id}")
         return _limit_response_size(json.dumps(result, indent=2))
 
@@ -235,9 +242,12 @@ def handle_cf_crawl(args: dict, **kw) -> str:
 
 def handle_cf_scrape(args: dict, **kw) -> str:
     """Scrape specific HTML elements from a page using CSS selectors."""
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
     selectors = args.get("selectors", [])
     elements = [{"selector": s} for s in selectors]
-    payload: Dict[str, Any] = {"url": args["url"], "elements": elements}
+    payload: Dict[str, Any] = {"url": url, "elements": elements}
     payload.update(_build_common_opts(args))
     result = _post("scrape", payload)
     return _limit_response_size(json.dumps(result, indent=2))
@@ -277,7 +287,10 @@ def handle_cf_json_extract(args: dict, **kw) -> str:
 
 def handle_cf_links(args: dict, **kw) -> str:
     """Extract all links from a web page."""
-    payload: Dict[str, Any] = {"url": args["url"]}
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
+    payload: Dict[str, Any] = {"url": url}
     if args.get("visible_only"):
         payload["visibleLinksOnly"] = args["visible_only"]
     if args.get("exclude_external"):
@@ -303,7 +316,10 @@ def handle_cf_content(args: dict, **kw) -> str:
 
 def handle_cf_screenshot(args: dict, **kw) -> str:
     """Take a screenshot of a web page. Returns base64-encoded image."""
-    payload: Dict[str, Any] = {"url": args["url"]}
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
+    payload: Dict[str, Any] = {"url": url}
     screenshot_opts: Dict[str, Any] = {}
     if args.get("full_page"):
         screenshot_opts["fullPage"] = args["full_page"]
@@ -326,7 +342,10 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
 
 def handle_cf_pdf(args: dict, **kw) -> str:
     """Render a web page as PDF. Returns base64-encoded PDF."""
-    payload: Dict[str, Any] = {"url": args["url"]}
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
+    payload: Dict[str, Any] = {"url": url}
     if args.get("pdf_options"):
         payload["pdfOptions"] = args["pdf_options"]
     if args.get("viewport"):
