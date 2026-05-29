@@ -20,10 +20,12 @@ Requires:
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import logging
 import os
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 try:
     import httpx
@@ -60,6 +62,36 @@ def _headers() -> dict:
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+
+
+def _validate_url(url: str) -> Optional[str]:
+    """Validate that *url* is well-formed and targets a public host.
+
+    Returns an error message string if invalid, or ``None`` if valid.
+    Blocks private/internal IP ranges and requires http(s) scheme.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return f"URL is not parseable: {url!r}"
+
+    if parsed.scheme not in ("http", "https"):
+        return f"URL scheme must be http or https, got {parsed.scheme!r}"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return f"URL is missing a hostname: {url!r}"
+
+    # Block private/reserved IPs (10.x, 172.16-31.x, 192.168.x, 127.x,
+    # 169.254.x, ::1, fc00::/7, etc.)
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return f"URL targets a private/internal address: {hostname}"
+    except ValueError:
+        pass  # hostname is a domain name, not an IP — that's fine
+
+    return None
 
 
 def _request(
@@ -181,6 +213,9 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         url = args.get("url")
         if not url:
             return json.dumps({"error": "'url' is required for action=start"})
+        url_err = _validate_url(url)
+        if url_err:
+            return json.dumps({"error": url_err})
         payload: Dict[str, Any] = {"url": url}
         if args.get("limit"):
             payload["limit"] = args["limit"]
@@ -237,6 +272,9 @@ def handle_cf_scrape(args: dict, **kw) -> str:
     url = args.get("url")
     if not url:
         return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
     selectors = args.get("selectors", [])
     elements = [{"selector": s} for s in selectors]
     payload: Dict[str, Any] = {"url": url, "elements": elements}
@@ -251,6 +289,9 @@ def handle_cf_markdown(args: dict, **kw) -> str:
         return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
+        url_err = _validate_url(args["url"])
+        if url_err:
+            return json.dumps({"error": url_err})
         payload["url"] = args["url"]
     if args.get("html"):
         payload["html"] = args["html"]
@@ -265,6 +306,9 @@ def handle_cf_json_extract(args: dict, **kw) -> str:
         return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
+        url_err = _validate_url(args["url"])
+        if url_err:
+            return json.dumps({"error": url_err})
         payload["url"] = args["url"]
     if args.get("html"):
         payload["html"] = args["html"]
@@ -282,6 +326,9 @@ def handle_cf_links(args: dict, **kw) -> str:
     url = args.get("url")
     if not url:
         return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
     if args.get("visible_only"):
         payload["visibleLinksOnly"] = args["visible_only"]
@@ -298,6 +345,9 @@ def handle_cf_content(args: dict, **kw) -> str:
         return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
     payload: Dict[str, Any] = {}
     if args.get("url"):
+        url_err = _validate_url(args["url"])
+        if url_err:
+            return json.dumps({"error": url_err})
         payload["url"] = args["url"]
     if args.get("html"):
         payload["html"] = args["html"]
@@ -311,6 +361,9 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
     url = args.get("url")
     if not url:
         return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
     screenshot_opts: Dict[str, Any] = {}
     if args.get("full_page"):
@@ -337,6 +390,9 @@ def handle_cf_pdf(args: dict, **kw) -> str:
     url = args.get("url")
     if not url:
         return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
     if args.get("pdf_options"):
         payload["pdfOptions"] = args["pdf_options"]
