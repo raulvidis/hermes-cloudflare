@@ -217,9 +217,9 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         if url_err:
             return json.dumps({"error": url_err})
         payload: Dict[str, Any] = {"url": url}
-        if args.get("limit"):
+        if args.get("limit") is not None:
             payload["limit"] = args["limit"]
-        if args.get("depth"):
+        if args.get("depth") is not None:
             payload["depth"] = args["depth"]
         if args.get("formats"):
             payload["formats"] = args["formats"]
@@ -248,7 +248,7 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         if not job_id:
             return json.dumps({"error": "'job_id' is required for action=status"})
         params: Dict[str, Any] = {}
-        if args.get("limit"):
+        if args.get("limit") is not None:
             params["limit"] = args["limit"]
         if args.get("cursor"):
             params["cursor"] = args["cursor"]
