@@ -40,6 +40,25 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://api.cloudflare.com/client/v4/accounts"
 
+# Module-level shared client for connection pooling. Created lazily on first
+# use so we don't fail at import time if httpx is missing.
+_shared_client: Any = None
+
+
+def _get_client(timeout: float = 60.0) -> Any:
+    """Return a shared httpx.Client, creating one if needed.
+
+    Per-request timeout is passed to the individual .request() call rather
+    than the constructor so the same client (and its connection pool) can be
+    reused across requests with different timeouts.
+    """
+    global _shared_client
+    if httpx is None:
+        raise RuntimeError("httpx is not installed. Run: pip install httpx")
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.Client(timeout=timeout)
+    return _shared_client
+
 
 def _check_available() -> bool:
     return bool(
@@ -125,27 +144,27 @@ def _request(
             )
         }
     try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = getattr(client, method)(
-                _api_url(endpoint), headers=_headers(), **kwargs
-            )
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "application/json" in content_type:
-                return resp.json()
-            if binary_ok:
-                return {
-                    "success": True,
-                    "result_base64": base64.b64encode(resp.content).decode(),
-                }
-            # Non-JSON, non-binary response — try parsing, return raw on failure
-            try:
-                return resp.json()
-            except Exception:
-                return {
-                    "error": f"Unexpected content-type from {method.upper()} {endpoint}: {content_type}",
-                    "raw": resp.text[:1000],
-                }
+        client = _get_client(timeout=timeout)
+        resp = getattr(client, method)(
+            _api_url(endpoint), headers=_headers(), **kwargs
+        )
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type:
+            return resp.json()
+        if binary_ok:
+            return {
+                "success": True,
+                "result_base64": base64.b64encode(resp.content).decode(),
+            }
+        # Non-JSON, non-binary response — try parsing, return raw on failure
+        try:
+            return resp.json()
+        except Exception:
+            return {
+                "error": f"Unexpected content-type from {method.upper()} {endpoint}: {content_type}",
+                "raw": resp.text[:1000],
+            }
     except httpx.HTTPStatusError as exc:
         logger.error("Cloudflare API error on %s %s: %s", method.upper(), endpoint, exc)
         return {
