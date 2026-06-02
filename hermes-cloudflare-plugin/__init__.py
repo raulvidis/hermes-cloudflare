@@ -224,6 +224,39 @@ def _limit_response_size(text: str, max_chars: int = 50000) -> str:
     return head + notice + tail
 
 
+def _limit_binary_response(result: dict, max_chars: int = 50000) -> str:
+    """Handle size limiting for binary (base64-encoded) responses.
+
+    Binary payloads must not be truncated mid-string because slicing through
+    base64 data produces an undecodable result *and* the truncation notice
+    breaks JSON parsing.  Instead, if the serialised response would exceed the
+    limit, return an error dict with metadata so the caller knows what happened.
+    """
+    serialized = json.dumps(result, indent=2)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    b64_value = result.get("result_base64", "")
+    if b64_value:
+        approx_bytes = len(b64_value) * 3 // 4
+        return json.dumps({
+            "success": result.get("success", True),
+            "error": (
+                f"Response too large to return ({len(serialized):,} chars, "
+                f"~{approx_bytes:,} bytes decoded). "
+                f"Use a smaller viewport, lower quality, or restrict to a selector."
+            ),
+            "size_info": {
+                "total_chars": len(serialized),
+                "base64_chars": len(b64_value),
+                "approx_decoded_bytes": approx_bytes,
+            },
+        }, indent=2)
+
+    # Non-binary but still too large — fall back to safe truncation
+    return _limit_response_size(serialized, max_chars)
+
+
 def handle_cf_crawl(args: dict, **kw) -> str:
     """Start an async crawl job or check status / cancel an existing one."""
     action = args.get("action", "start")
@@ -401,7 +434,7 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
         payload["selector"] = args["selector"]
     payload.update(_build_common_opts(args))
     result = _post("screenshot", payload)
-    return _limit_response_size(json.dumps(result, indent=2))
+    return _limit_binary_response(result)
 
 
 def handle_cf_pdf(args: dict, **kw) -> str:
@@ -423,7 +456,7 @@ def handle_cf_pdf(args: dict, **kw) -> str:
         payload["footerTemplate"] = args["footer_template"]
     payload.update(_build_common_opts(args))
     result = _post("pdf", payload)
-    return _limit_response_size(json.dumps(result, indent=2))
+    return _limit_binary_response(result)
 
 
 # ---------------------------------------------------------------------------
