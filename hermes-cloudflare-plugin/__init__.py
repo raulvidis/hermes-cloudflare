@@ -24,6 +24,7 @@ import ipaddress
 import json
 import logging
 import os
+import threading
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -43,6 +44,7 @@ _BASE = "https://api.cloudflare.com/client/v4/accounts"
 # Module-level shared client for connection pooling. Created lazily on first
 # use so we don't fail at import time if httpx is missing.
 _shared_client: Any = None
+_client_lock = threading.Lock()
 
 
 def _get_client(timeout: float = 60.0) -> Any:
@@ -56,7 +58,9 @@ def _get_client(timeout: float = 60.0) -> Any:
     if httpx is None:
         raise RuntimeError("httpx is not installed. Run: pip install httpx")
     if _shared_client is None or _shared_client.is_closed:
-        _shared_client = httpx.Client(timeout=timeout)
+        with _client_lock:
+            if _shared_client is None or _shared_client.is_closed:
+                _shared_client = httpx.Client(timeout=timeout)
     return _shared_client
 
 
