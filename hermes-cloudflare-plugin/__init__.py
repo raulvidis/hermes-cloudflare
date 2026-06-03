@@ -328,6 +328,10 @@ def handle_cf_scrape(args: dict, **kw) -> str:
     if url_err:
         return json.dumps({"error": url_err})
     selectors = args.get("selectors", [])
+    if isinstance(selectors, str):
+        selectors = [s.strip() for s in selectors.split(",") if s.strip()]
+    if not selectors:
+        return json.dumps({"error": "'selectors' must be a non-empty list of CSS selectors"})
     elements = [{"selector": s} for s in selectors]
     payload: Dict[str, Any] = {"url": url, "elements": elements}
     payload.update(_build_common_opts(args))
