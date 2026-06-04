@@ -58,7 +58,7 @@ def _cleanup_client() -> None:
 atexit.register(_cleanup_client)
 
 
-def _get_client(timeout: float = 60.0) -> Any:
+def _get_client() -> Any:
     """Return a shared httpx.Client, creating one if needed.
 
     Per-request timeout is passed to the individual .request() call rather
@@ -71,7 +71,7 @@ def _get_client(timeout: float = 60.0) -> Any:
     if _shared_client is None or _shared_client.is_closed:
         with _client_lock:
             if _shared_client is None or _shared_client.is_closed:
-                _shared_client = httpx.Client(timeout=timeout)
+                _shared_client = httpx.Client(timeout=60.0)
     return _shared_client
 
 
@@ -159,9 +159,9 @@ def _request(
             )
         }
     try:
-        client = _get_client(timeout=timeout)
+        client = _get_client()
         resp = getattr(client, method)(
-            _api_url(endpoint), headers=_headers(), **kwargs
+            _api_url(endpoint), headers=_headers(), timeout=timeout, **kwargs
         )
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
