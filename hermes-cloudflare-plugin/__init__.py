@@ -20,6 +20,7 @@ Requires:
 from __future__ import annotations
 
 import base64
+import atexit
 import ipaddress
 import json
 import logging
@@ -43,6 +44,16 @@ _BASE = "https://api.cloudflare.com/client/v4/accounts"
 # Module-level shared client for connection pooling. Created lazily on first
 # use so we don't fail at import time if httpx is missing.
 _shared_client: Any = None
+
+
+def _cleanup_client() -> None:
+    """Close the shared httpx client on process exit."""
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        _shared_client.close()
+
+
+atexit.register(_cleanup_client)
 
 
 def _get_client(timeout: float = 60.0) -> Any:
