@@ -176,9 +176,9 @@ def _request(
         return {"error": f"Request to Cloudflare API failed: {exc}"}
 
 
-def _post(endpoint: str, payload: dict, *, timeout: float = 120.0) -> dict:
+def _post(endpoint: str, payload: dict, *, timeout: float = 120.0, binary_ok: bool = False) -> dict:
     """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
-    return _request("post", endpoint, json=payload, timeout=timeout, binary_ok=True)
+    return _request("post", endpoint, json=payload, timeout=timeout, binary_ok=binary_ok)
 
 
 def _get(
@@ -433,7 +433,7 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
     if args.get("selector"):
         payload["selector"] = args["selector"]
     payload.update(_build_common_opts(args))
-    result = _post("screenshot", payload)
+    result = _post("screenshot", payload, binary_ok=True)
     return _limit_binary_response(result)
 
 
@@ -455,7 +455,7 @@ def handle_cf_pdf(args: dict, **kw) -> str:
     if args.get("footer_template"):
         payload["footerTemplate"] = args["footer_template"]
     payload.update(_build_common_opts(args))
-    result = _post("pdf", payload)
+    result = _post("pdf", payload, binary_ok=True)
     return _limit_binary_response(result)
 
 
