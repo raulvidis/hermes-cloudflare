@@ -19,6 +19,8 @@ Requires:
 
 from __future__ import annotations
 
+import re
+
 import base64
 import atexit
 import ipaddress
@@ -104,10 +106,7 @@ def _validate_url(url: str) -> Optional[str]:
     Returns an error message string if invalid, or ``None`` if valid.
     Blocks private/internal IP ranges and requires http(s) scheme.
     """
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return f"URL is not parseable: {url!r}"
+    parsed = urlparse(url)
 
     if parsed.scheme not in ("http", "https"):
         return f"URL scheme must be http or https, got {parsed.scheme!r}"
@@ -314,6 +313,8 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         job_id = args.get("job_id")
         if not job_id:
             return json.dumps({"error": "'job_id' is required for action=status"})
+        if not re.match(r"^[a-zA-Z0-9_-]+$", str(job_id)):
+            return json.dumps({"error": "Invalid job_id format"})
         params: Dict[str, Any] = {}
         if args.get("limit") is not None:
             params["limit"] = args["limit"]
@@ -328,6 +329,8 @@ def handle_cf_crawl(args: dict, **kw) -> str:
         job_id = args.get("job_id")
         if not job_id:
             return json.dumps({"error": "'job_id' is required for action=cancel"})
+        if not re.match(r"^[a-zA-Z0-9_-]+$", str(job_id)):
+            return json.dumps({"error": "Invalid job_id format"})
         result = _delete(f"crawl/{job_id}")
         return _limit_response_size(json.dumps(result, indent=2))
 
