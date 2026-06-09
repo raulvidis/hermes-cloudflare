@@ -115,11 +115,18 @@ def _validate_url(url: str) -> Optional[str]:
     if not hostname:
         return f"URL is missing a hostname: {url!r}"
 
-    # Block private/reserved IPs (10.x, 172.16-31.x, 192.168.x, 127.x,
-    # 169.254.x, ::1, fc00::/7, etc.)
+    # Block private/reserved/multicast IPs (10.x, 172.16-31.x, 192.168.x,
+    # 127.x, 169.254.x, ::1, fc00::/7, multicast, unspecified, etc.)
     try:
         addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
             return f"URL targets a private/internal address: {hostname}"
     except ValueError:
         pass  # hostname is a domain name, not an IP — that's fine
