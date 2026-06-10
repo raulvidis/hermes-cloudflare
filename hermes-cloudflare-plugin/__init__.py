@@ -212,6 +212,22 @@ def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
     return _request("delete", endpoint, timeout=timeout)
 
 
+def _BLOCKED_HEADERS() -> frozenset:
+    """Headers that must never be forwarded via extra_headers."""
+    return frozenset({
+        "authorization", "host", "cookie", "proxy-authorization",
+        "set-cookie", "proxy-authenticate", "www-authenticate",
+    })
+
+
+def _sanitize_extra_headers(headers: dict) -> dict:
+    """Strip sensitive headers from user-supplied extra_headers."""
+    return {
+        k: v for k, v in headers.items()
+        if k.lower() not in _BLOCKED_HEADERS()
+    }
+
+
 def _build_common_opts(args: dict) -> dict:
     """Extract common optional parameters shared across endpoints."""
     opts: Dict[str, Any] = {}
@@ -224,7 +240,7 @@ def _build_common_opts(args: dict) -> dict:
     if args.get("reject_resource_types"):
         opts["rejectResourceTypes"] = args["reject_resource_types"]
     if args.get("extra_headers"):
-        opts["setExtraHTTPHeaders"] = args["extra_headers"]
+        opts["setExtraHTTPHeaders"] = _sanitize_extra_headers(args["extra_headers"])
     if args.get("cookies"):
         opts["cookies"] = args["cookies"]
     return opts
