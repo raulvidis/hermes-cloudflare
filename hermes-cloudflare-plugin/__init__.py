@@ -188,9 +188,13 @@ def _request(
             }
     except httpx.HTTPStatusError as exc:
         logger.error("Cloudflare API error on %s %s: %s", method.upper(), endpoint, exc)
+        try:
+            detail = exc.response.text[:500]
+        except (UnicodeDecodeError, AttributeError):
+            detail = exc.response.content.decode("utf-8", errors="replace")[:500]
         return {
             "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
-            "detail": exc.response.text[:500],
+            "detail": detail,
         }
     except httpx.RequestError as exc:
         logger.error("Cloudflare request failed on %s %s: %s", method.upper(), endpoint, exc)
