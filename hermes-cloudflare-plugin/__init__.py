@@ -467,13 +467,13 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
         return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
     screenshot_opts: Dict[str, Any] = {}
-    if args.get("full_page"):
+    if args.get("full_page") is not None:
         screenshot_opts["fullPage"] = args["full_page"]
     if args.get("image_type"):
         screenshot_opts["type"] = args["image_type"]
-    if args.get("quality"):
+    if args.get("quality") is not None:
         screenshot_opts["quality"] = args["quality"]
-    if args.get("omit_background"):
+    if args.get("omit_background") is not None:
         screenshot_opts["omitBackground"] = args["omit_background"]
     if screenshot_opts:
         payload["screenshotOptions"] = screenshot_opts
