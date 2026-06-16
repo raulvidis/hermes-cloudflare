@@ -375,6 +375,10 @@ def handle_cf_scrape(args: dict, **kw) -> str:
     selectors = args.get("selectors", [])
     if isinstance(selectors, str):
         selectors = [s.strip() for s in selectors.split(",") if s.strip()]
+    elif not isinstance(selectors, list):
+        # Reject non-iterable values (int/float/bool) that would otherwise raise
+        # TypeError on the comprehension below instead of a clean JSON error.
+        return json.dumps({"error": "'selectors' must be a list of CSS selectors"})
     if not selectors:
         return json.dumps({"error": "'selectors' must be a non-empty list of CSS selectors"})
     elements = [{"selector": s} for s in selectors]
