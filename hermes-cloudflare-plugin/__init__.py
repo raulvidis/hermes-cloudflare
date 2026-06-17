@@ -216,19 +216,17 @@ def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
     return _request("delete", endpoint, timeout=timeout)
 
 
-def _BLOCKED_HEADERS() -> frozenset:
-    """Headers that must never be forwarded via extra_headers."""
-    return frozenset({
-        "authorization", "host", "cookie", "proxy-authorization",
-        "set-cookie", "proxy-authenticate", "www-authenticate",
-    })
+_BLOCKED_HEADERS = frozenset({
+    "authorization", "host", "cookie", "proxy-authorization",
+    "set-cookie", "proxy-authenticate", "www-authenticate",
+})
 
 
 def _sanitize_extra_headers(headers: dict) -> dict:
     """Strip sensitive headers from user-supplied extra_headers."""
     return {
         k: v for k, v in headers.items()
-        if k.lower() not in _BLOCKED_HEADERS()
+        if k.lower() not in _BLOCKED_HEADERS
     }
 
 
