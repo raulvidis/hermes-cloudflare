@@ -256,8 +256,6 @@ def _build_common_opts(args: dict) -> dict:
         opts["rejectResourceTypes"] = args["reject_resource_types"]
     if args.get("extra_headers"):
         opts["setExtraHTTPHeaders"] = _sanitize_extra_headers(args["extra_headers"])
-    if args.get("cookies"):
-        opts["cookies"] = args["cookies"]
     return opts
 
 
