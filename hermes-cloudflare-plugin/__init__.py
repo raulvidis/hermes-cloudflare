@@ -27,6 +27,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 import threading
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -115,21 +116,33 @@ def _validate_url(url: str) -> Optional[str]:
     if not hostname:
         return f"URL is missing a hostname: {url!r}"
 
-    # Block private/reserved/multicast IPs (10.x, 172.16-31.x, 192.168.x,
-    # 127.x, 169.254.x, ::1, fc00::/7, multicast, unspecified, etc.)
+    # Resolve the hostname to a concrete address, if it is an IP literal.
+    # ipaddress.ip_address() handles canonical dotted-quad and IPv6, but
+    # socket.inet_aton() additionally decodes integer/hex/octal-encoded
+    # forms (e.g. "2852039166" -> 169.254.169.254, "0x7f000001" -> 127.0.0.1,
+    # "0177.0.0.1" -> 127.0.0.1) that bypass the canonical check yet resolve
+    # to real private/loopback addresses in libc-based resolvers.
+    addr: Optional[Any] = None
     try:
         addr = ipaddress.ip_address(hostname)
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-            or addr.is_multicast
-            or addr.is_unspecified
-        ):
-            return f"URL targets a private/internal address: {hostname}"
     except ValueError:
-        pass  # hostname is a domain name, not an IP — that's fine
+        try:
+            packed = socket.inet_aton(hostname)
+            addr = ipaddress.ip_address(socket.inet_ntoa(packed))
+        except OSError:
+            pass  # hostname is a domain name, not an IP literal — that's fine
+
+    # Block private/reserved/multicast IPs (10.x, 172.16-31.x, 192.168.x,
+    # 127.x, 169.254.x, ::1, fc00::/7, multicast, unspecified, etc.)
+    if addr is not None and (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    ):
+        return f"URL targets a private/internal address: {hostname}"
 
     return None
 
