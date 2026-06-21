@@ -337,7 +337,7 @@ def handle_cf_crawl(args: dict, **kw) -> str:
             payload.setdefault("options", {})["excludePatterns"] = args[
                 "exclude_patterns"
             ]
-        if args.get("include_subdomains"):
+        if args.get("include_subdomains") is not None:
             payload.setdefault("options", {})["includeSubdomains"] = args[
                 "include_subdomains"
             ]
@@ -444,9 +444,9 @@ def handle_cf_links(args: dict, **kw) -> str:
     if url_err:
         return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
-    if args.get("visible_only"):
+    if args.get("visible_only") is not None:
         payload["visibleLinksOnly"] = args["visible_only"]
-    if args.get("exclude_external"):
+    if args.get("exclude_external") is not None:
         payload["excludeExternalLinks"] = args["exclude_external"]
     payload.update(_build_common_opts(args))
     result = _post("links", payload)
