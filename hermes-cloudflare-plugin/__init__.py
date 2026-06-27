@@ -212,6 +212,9 @@ def _request(
     except httpx.RequestError as exc:
         logger.error("Cloudflare request failed on %s %s: %s", method.upper(), endpoint, exc)
         return {"error": f"Request to Cloudflare API failed: {exc}"}
+    except Exception as exc:
+        logger.error("Unexpected error on %s %s: %s", method.upper(), endpoint, exc)
+        return {"error": f"Unexpected error: {exc}"}
 
 
 def _post(endpoint: str, payload: dict, *, timeout: float = 120.0, binary_ok: bool = False) -> dict:
