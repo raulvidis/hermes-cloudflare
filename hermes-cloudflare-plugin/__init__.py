@@ -236,11 +236,15 @@ _BLOCKED_HEADERS = frozenset({
 
 
 def _sanitize_extra_headers(headers: dict) -> dict:
-    """Strip sensitive headers from user-supplied extra_headers."""
-    return {
+    """Strip sensitive headers from user-supplied extra_headers and validate types."""
+    filtered = {
         k: v for k, v in headers.items()
         if k.lower() not in _BLOCKED_HEADERS
     }
+    bad = [k for k, v in filtered.items() if not isinstance(v, str)]
+    if bad:
+        raise ValueError(f"extra_headers values must be strings, got non-string for: {', '.join(bad)}")
+    return filtered
 
 
 def _build_common_opts(args: dict) -> dict:
@@ -811,6 +815,7 @@ TOOLS = [
                         ],
                     },
                     "user_agent": {"type": "string"},
+                    "wait_for_selector": {"type": "string"},
                 },
                 "required": ["url"],
             },
