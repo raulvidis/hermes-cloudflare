@@ -9,6 +9,7 @@ set -euo pipefail
 PLUGIN_DIR="$HOME/.hermes/plugins/hermes-cloudflare"
 REPO="https://github.com/raulvidis/hermes-cloudflare.git"
 TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Installing hermes-cloudflare plugin..."
 
@@ -23,7 +24,7 @@ cp -r "$TMP_DIR/hermes-cloudflare-plugin" "$PLUGIN_DIR"
 # Install Python dependency (httpx) if missing
 if ! python3 -c "import httpx" 2>/dev/null; then
     echo "Installing httpx..."
-    pip install httpx 2>/dev/null || pip3 install httpx 2>/dev/null || echo "Warning: could not install httpx — install it manually"
+    pip install 'httpx>=0.24.0' 2>/dev/null || pip3 install 'httpx>=0.24.0' 2>/dev/null || echo "Warning: could not install httpx — install it manually"
 fi
 
 # Cleanup
