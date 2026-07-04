@@ -177,9 +177,12 @@ def _request(
                 "environment variables"
             )
         }
+    _allowed_methods = frozenset({"get", "post", "delete", "put", "patch"})
+    if method.lower() not in _allowed_methods:
+        return {"error": f"Unsupported HTTP method: {method}"}
     try:
         client = _get_client()
-        resp = getattr(client, method)(
+        resp = getattr(client, method.lower())(
             _api_url(endpoint), headers=_headers(), timeout=timeout, **kwargs
         )
         resp.raise_for_status()
