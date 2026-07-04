@@ -45,6 +45,13 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://api.cloudflare.com/client/v4/accounts"
 
+# Well-known local/metadata hostnames that resolve to private IPs and bypass
+# the IP-literal checks below.
+_BLOCKED_HOSTNAMES = frozenset({
+    "localhost", "ip6-localhost", "ip6-loopback",
+    "metadata", "metadata.google.internal",
+})
+
 # Module-level shared client for connection pooling. Created lazily on first
 # use so we don't fail at import time if httpx is missing.
 _shared_client: Any = None
@@ -130,7 +137,11 @@ def _validate_url(url: str) -> Optional[str]:
             packed = socket.inet_aton(hostname)
             addr = ipaddress.ip_address(socket.inet_ntoa(packed))
         except OSError:
-            pass  # hostname is a domain name, not an IP literal — that's fine
+            pass  # hostname is a domain name, not an IP literal
+
+    # Block well-known local/metadata hostnames that resolve to private IPs.
+    if hostname.lower() in _BLOCKED_HOSTNAMES:
+        return f"URL targets a blocked hostname: {hostname}"
 
     # Block private/reserved/multicast IPs (10.x, 172.16-31.x, 192.168.x,
     # 127.x, 169.254.x, ::1, fc00::/7, multicast, unspecified, etc.)
@@ -143,6 +154,31 @@ def _validate_url(url: str) -> Optional[str]:
         or addr.is_unspecified
     ):
         return f"URL targets a private/internal address: {hostname}"
+
+    # DNS-rebinding guard: resolve the hostname and check every resolved IP.
+    if addr is None:
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+            for family, _st, _pr, _cn, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                try:
+                    resolved_addr = ipaddress.ip_address(ip_str)
+                except ValueError:
+                    continue
+                if (
+                    resolved_addr.is_private
+                    or resolved_addr.is_loopback
+                    or resolved_addr.is_link_local
+                    or resolved_addr.is_reserved
+                    or resolved_addr.is_multicast
+                    or resolved_addr.is_unspecified
+                ):
+                    return (
+                        f"URL hostname {hostname} resolves to private/internal "
+                        f"address {ip_str}"
+                    )
+        except socket.gaierror:
+            pass  # DNS resolution failed — let Cloudflare return the error
 
     return None
 
