@@ -302,7 +302,7 @@ def _limit_binary_response(result: dict, max_chars: int = 50000) -> str:
     if b64_value:
         approx_bytes = len(b64_value) * 3 // 4
         return json.dumps({
-            "success": result.get("success", True),
+            "success": False,
             "error": (
                 f"Response too large to return ({len(serialized):,} chars, "
                 f"~{approx_bytes:,} bytes decoded). "
