@@ -240,6 +240,8 @@ _BLOCKED_HEADERS = frozenset({
 
 def _sanitize_extra_headers(headers: dict) -> dict:
     """Strip sensitive headers from user-supplied extra_headers and validate types."""
+    if not isinstance(headers, dict):
+        raise ValueError(f"extra_headers must be a dict, got {type(headers).__name__}")
     filtered = {
         k: v for k, v in headers.items()
         if k.lower() not in _BLOCKED_HEADERS
@@ -262,7 +264,10 @@ def _build_common_opts(args: dict) -> dict:
     if args.get("reject_resource_types"):
         opts["rejectResourceTypes"] = args["reject_resource_types"]
     if args.get("extra_headers"):
-        opts["setExtraHTTPHeaders"] = _sanitize_extra_headers(args["extra_headers"])
+        try:
+            opts["setExtraHTTPHeaders"] = _sanitize_extra_headers(args["extra_headers"])
+        except ValueError as exc:
+            logger.warning("Invalid extra_headers ignored: %s", exc)
     return opts
 
 
