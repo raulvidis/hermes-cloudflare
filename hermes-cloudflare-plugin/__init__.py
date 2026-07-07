@@ -683,6 +683,10 @@ TOOLS = [
                         "items": {"type": "string"},
                         "description": "Block resource types: image, media, font, stylesheet",
                     },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
                 "required": ["action"],
             },
@@ -730,6 +734,15 @@ TOOLS = [
                         "type": "string",
                         "description": "CSS selector to wait for before scraping",
                     },
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Block resource types: image, media, font, stylesheet",
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
                 "required": ["url", "selectors"],
             },
@@ -773,6 +786,10 @@ TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Block resource types to speed up rendering",
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
                     },
                 },
                 "required": [],
@@ -821,6 +838,15 @@ TOOLS = [
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Block resource types: image, media, font, stylesheet",
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
                 "required": [],
             },
@@ -863,6 +889,15 @@ TOOLS = [
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Block resource types: image, media, font, stylesheet",
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
                 "required": ["url"],
             },
@@ -968,6 +1003,15 @@ TOOLS = [
                     },
                     "user_agent": {"type": "string"},
                     "wait_for_selector": {"type": "string"},
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Block resource types: image, media, font, stylesheet",
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
                 },
                 "required": ["url"],
             },
@@ -1022,6 +1066,10 @@ TOOLS = [
                     "reject_resource_types": {
                         "type": "array",
                         "items": {"type": "string"},
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
                     },
                 },
                 "required": ["url"],
