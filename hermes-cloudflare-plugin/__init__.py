@@ -156,9 +156,22 @@ def _validate_url(url: str) -> Optional[str]:
         return f"URL targets a private/internal address: {hostname}"
 
     # DNS-rebinding guard: resolve the hostname and check every resolved IP.
+    # socket.getaddrinfo() uses the system resolver with no timeout parameter
+    # and can block for 10-30s on slow/misconfigured DNS. Since this runs on a
+    # synchronous handler thread, we wrap it with a hard timeout.
     if addr is None:
+        import concurrent.futures
         try:
-            resolved = socket.getaddrinfo(hostname, None)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(socket.getaddrinfo, hostname, None)
+                try:
+                    resolved = fut.result(timeout=3.0)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        "DNS resolution timed out for %s — skipping "
+                        "rebinding check", hostname
+                    )
+                    return None
             for family, _st, _pr, _cn, sockaddr in resolved:
                 ip_str = sockaddr[0]
                 try:
