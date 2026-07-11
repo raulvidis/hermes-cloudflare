@@ -27,9 +27,6 @@ if ! python3 -c "import httpx" 2>/dev/null; then
     pip install 'httpx>=0.24.0' 2>/dev/null || pip3 install 'httpx>=0.24.0' 2>/dev/null || echo "Warning: could not install httpx — install it manually"
 fi
 
-# Cleanup
-rm -rf "$TMP_DIR"
-
 echo "hermes-cloudflare plugin installed to $PLUGIN_DIR"
 echo "  Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in your environment."
 echo "  Restart hermes-gateway, then run /plugins to verify."
