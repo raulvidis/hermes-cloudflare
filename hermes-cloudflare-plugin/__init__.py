@@ -140,7 +140,9 @@ def _validate_url(url: str) -> Optional[str]:
             pass  # hostname is a domain name, not an IP literal
 
     # Block well-known local/metadata hostnames that resolve to private IPs.
-    if hostname.lower() in _BLOCKED_HOSTNAMES:
+    # Strip trailing dots to prevent bypass via fully-qualified domain names
+    # (e.g. "localhost." is equivalent to "localhost").
+    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
         return f"URL targets a blocked hostname: {hostname}"
 
     # Block private/reserved/multicast IPs (10.x, 172.16-31.x, 192.168.x,
