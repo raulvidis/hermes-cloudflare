@@ -160,21 +160,43 @@ def _validate_url(url: str) -> Optional[str]:
     # DNS-rebinding guard: resolve the hostname and check every resolved IP.
     # socket.getaddrinfo() uses the system resolver with no timeout parameter
     # and can block for 10-30s on slow/misconfigured DNS. Since this runs on a
-    # synchronous handler thread, we wrap it with a hard timeout.
+    # synchronous handler thread, we use a daemon thread with join(timeout).
+    #
+    # NOTE: We intentionally do NOT use ThreadPoolExecutor as a context manager
+    # here. When the timeout fires, __exit__ calls shutdown(wait=True), which
+    # joins the worker thread still blocked inside getaddrinfo() — blocking the
+    # handler for the full DNS resolution time and defeating the timeout.
+    #
+    # On timeout we FAIL CLOSED (return an error) rather than None, because
+    # returning None would silently bypass the SSRF rebinding check. An
+    # attacker who can slow DNS resolution could otherwise reach internal IPs.
     if addr is None:
-        import concurrent.futures
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(socket.getaddrinfo, hostname, None)
-                try:
-                    resolved = fut.result(timeout=3.0)
-                except concurrent.futures.TimeoutError:
-                    logger.warning(
-                        "DNS resolution timed out for %s — skipping "
-                        "rebinding check", hostname
-                    )
-                    return None
-            for family, _st, _pr, _cn, sockaddr in resolved:
+        result_holder: dict[str, Any] = {}
+
+        def _resolve() -> None:
+            try:
+                result_holder["addrs"] = socket.getaddrinfo(hostname, None)
+            except socket.gaierror as e:
+                result_holder["error"] = e
+
+        t = threading.Thread(target=_resolve, daemon=True)
+        t.start()
+        t.join(timeout=3.0)
+
+        if t.is_alive():
+            logger.warning(
+                "DNS resolution timed out for %s — blocking request "
+                "(cannot verify SSRF safety)", hostname,
+            )
+            return (
+                f"DNS resolution timed out for {hostname} — "
+                "cannot verify URL safety"
+            )
+
+        if "error" in result_holder:
+            pass  # DNS failed — let Cloudflare return the error
+        elif "addrs" in result_holder:
+            for _family, _st, _pr, _cn, sockaddr in result_holder["addrs"]:
                 ip_str = sockaddr[0]
                 try:
                     resolved_addr = ipaddress.ip_address(ip_str)
@@ -192,8 +214,6 @@ def _validate_url(url: str) -> Optional[str]:
                         f"URL hostname {hostname} resolves to private/internal "
                         f"address {ip_str}"
                     )
-        except socket.gaierror:
-            pass  # DNS resolution failed — let Cloudflare return the error
 
     return None
 
