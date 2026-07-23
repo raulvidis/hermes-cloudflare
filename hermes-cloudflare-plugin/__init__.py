@@ -316,6 +316,18 @@ def _sanitize_extra_headers(headers: dict) -> dict:
     """Strip sensitive headers from user-supplied extra_headers and validate types."""
     if not isinstance(headers, dict):
         raise ValueError(f"extra_headers must be a dict, got {type(headers).__name__}")
+    # Reject non-string keys (int/None/bytes) before calling .lower()
+    bad_keys = [k for k in headers if not isinstance(k, str)]
+    if bad_keys:
+        raise ValueError(f"extra_headers keys must be strings, got non-string for: {bad_keys!r}")
+    # Reject CR/LF/NUL in keys or values to prevent header injection
+    bad_ctl = [
+        k for k, v in headers.items()
+        if any(c in k for c in ("\r", "\n", "\x00"))
+        or (isinstance(v, str) and any(c in v for c in ("\r", "\n", "\x00")))
+    ]
+    if bad_ctl:
+        raise ValueError("extra_headers must not contain control characters (CR/LF/NUL)")
     filtered = {
         k: v for k, v in headers.items()
         if k.lower() not in _BLOCKED_HEADERS
