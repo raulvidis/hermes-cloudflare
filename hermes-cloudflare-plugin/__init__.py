@@ -29,6 +29,7 @@ import logging
 import os
 import socket
 import threading
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -66,6 +67,18 @@ def _cleanup_client() -> None:
 
 
 atexit.register(_cleanup_client)
+
+# DNS resolution cache to prevent orphaned daemon threads under sustained
+# slow-DNS. Each timed-out getaddrinfo() spawns a daemon thread that lives
+# until the OS resolver returns — under attack or flaky DNS, threads pile up.
+# Cache hits bypass the thread entirely; negative cache prevents repeated
+# timeouts on the same slow hostname.
+#
+# Structure: {hostname: (addrs_list_or_None, expiry_timestamp)}
+_DNS_CACHE: dict[str, tuple[Any, float]] = {}
+_DNS_CACHE_LOCK = threading.Lock()
+_DNS_CACHE_TTL = 300.0       # 5 minutes for successful resolutions
+_DNS_NEGATIVE_CACHE_TTL = 30.0  # 30 seconds for timeout/error results
 
 
 def _get_client() -> Any:
@@ -171,32 +184,72 @@ def _validate_url(url: str) -> Optional[str]:
     # returning None would silently bypass the SSRF rebinding check. An
     # attacker who can slow DNS resolution could otherwise reach internal IPs.
     if addr is None:
-        result_holder: dict[str, Any] = {}
+        # Check the DNS cache first to avoid spawning a daemon thread for
+        # hostnames we've already resolved (or timed out on) recently.
+        with _DNS_CACHE_LOCK:
+            cached = _DNS_CACHE.get(hostname)
+            if cached is not None:
+                cached_addrs, expiry = cached
+                if time.monotonic() < expiry:
+                    if cached_addrs is None:
+                        # Negative cache hit: previous resolution timed out.
+                        logger.warning(
+                            "DNS resolution timed out for %s (cached) — "
+                            "blocking request (cannot verify SSRF safety)",
+                            hostname,
+                        )
+                        return (
+                            f"DNS resolution timed out for {hostname} — "
+                            "cannot verify URL safety"
+                        )
+                    # Positive cache hit: use cached addresses.
+                    addrs = cached_addrs
+                else:
+                    # Expired — remove from cache and fall through to resolve.
+                    del _DNS_CACHE[hostname]
+                    addrs = None
+            else:
+                addrs = None
 
-        def _resolve() -> None:
-            try:
-                result_holder["addrs"] = socket.getaddrinfo(hostname, None)
-            except socket.gaierror as e:
-                result_holder["error"] = e
+        if addrs is None:
+            result_holder: dict[str, Any] = {}
 
-        t = threading.Thread(target=_resolve, daemon=True)
-        t.start()
-        t.join(timeout=3.0)
+            def _resolve() -> None:
+                try:
+                    result_holder["addrs"] = socket.getaddrinfo(hostname, None)
+                except socket.gaierror as e:
+                    result_holder["error"] = e
 
-        if t.is_alive():
-            logger.warning(
-                "DNS resolution timed out for %s — blocking request "
-                "(cannot verify SSRF safety)", hostname,
-            )
-            return (
-                f"DNS resolution timed out for {hostname} — "
-                "cannot verify URL safety"
-            )
+            t = threading.Thread(target=_resolve, daemon=True)
+            t.start()
+            t.join(timeout=3.0)
 
-        if "error" in result_holder:
-            pass  # DNS failed — let Cloudflare return the error
-        elif "addrs" in result_holder:
-            for _family, _st, _pr, _cn, sockaddr in result_holder["addrs"]:
+            if t.is_alive():
+                # Cache the timeout as a negative entry so repeated lookups
+                # of the same slow hostname don't spawn new daemon threads.
+                with _DNS_CACHE_LOCK:
+                    _DNS_CACHE[hostname] = (None, time.monotonic() + _DNS_NEGATIVE_CACHE_TTL)
+                logger.warning(
+                    "DNS resolution timed out for %s — blocking request "
+                    "(cannot verify SSRF safety)", hostname,
+                )
+                return (
+                    f"DNS resolution timed out for {hostname} — "
+                    "cannot verify URL safety"
+                )
+
+            if "error" in result_holder:
+                pass  # DNS failed — let Cloudflare return the error
+            elif "addrs" in result_holder:
+                addrs = result_holder["addrs"]
+                # Cache successful resolutions to avoid future thread spawns.
+                with _DNS_CACHE_LOCK:
+                    _DNS_CACHE[hostname] = (addrs, time.monotonic() + _DNS_CACHE_TTL)
+            else:
+                addrs = None
+
+        if addrs is not None:
+            for _family, _st, _pr, _cn, sockaddr in addrs:
                 ip_str = sockaddr[0]
                 try:
                     resolved_addr = ipaddress.ip_address(ip_str)
