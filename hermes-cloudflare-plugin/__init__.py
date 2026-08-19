@@ -2,7 +2,7 @@
 Cloudflare Browser Rendering Plugin
 ====================================
 
-Provides tools for Cloudflare's Browser Rendering REST API:
+Provides tools for Cloudflare's Browser Rendering ("Browser Run") REST API:
   - /crawl   – async website crawling with pagination
   - /scrape  – CSS-selector-based element extraction
   - /markdown – page-to-markdown conversion
@@ -10,10 +10,21 @@ Provides tools for Cloudflare's Browser Rendering REST API:
   - /links   – link discovery
   - /content – full rendered HTML
   - /screenshot – page screenshots
-  - /pdf     – page-to-PDF rendering
+  - /pdf     – page-to-PDF rendering (URL or raw HTML)
+  - /snapshot – multiple formats in one request
+  - /accessibilityTree – accessibility tree capture
+
+Plus Cloudflare companion APIs:
+  - Workers AI text generation (/ai/run/<model>)
+  - DNS-over-HTTPS lookups (cloudflare-dns.com, no auth needed)
+
+Binary outputs (screenshots/PDFs) can be saved to a local file via
+``output_path`` or uploaded to an R2 bucket via ``r2_bucket``/``r2_key``.
 
 Requires:
   CLOUDFLARE_API_TOKEN  – API token with "Browser Rendering - Edit" permission
+                          (plus "Workers AI - Read" for cf_ai_chat and
+                          "Workers R2 Storage - Edit" for R2 uploads)
   CLOUDFLARE_ACCOUNT_ID – Your Cloudflare account ID
 """
 
@@ -23,10 +34,12 @@ import re
 
 import base64
 import atexit
+import hashlib
 import ipaddress
 import json
 import logging
 import os
+import random
 import socket
 import threading
 import time
@@ -104,11 +117,19 @@ def _check_available() -> bool:
     )
 
 
-def _api_url(endpoint: str) -> str:
+def _account_api_url(path: str) -> str:
+    """Build a Cloudflare API v4 URL relative to the account root.
+
+    *path* is e.g. ``browser-rendering/content`` or ``ai/run/<model>``.
+    """
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     if not account_id:
         raise ValueError("CLOUDFLARE_ACCOUNT_ID environment variable is not set")
-    return f"{_BASE}/{account_id}/browser-rendering/{endpoint}"
+    return f"{_BASE}/{account_id}/{path}"
+
+
+def _api_url(endpoint: str) -> str:
+    return _account_api_url(f"browser-rendering/{endpoint}")
 
 
 def _headers() -> dict:
@@ -271,22 +292,76 @@ def _validate_url(url: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Response cache (read-mostly endpoints; renders are billed per browser-second)
+# ---------------------------------------------------------------------------
+
+_RESPONSE_CACHE: Dict[str, tuple] = {}
+_RESPONSE_CACHE_LOCK = threading.Lock()
+_RESPONSE_CACHE_TTL = 300.0          # 5 minutes
+_RESPONSE_CACHE_MAX_ENTRIES = 64
+
+# Retry policy for rate limits / transient server errors.
+_MAX_ATTEMPTS = 3
+
+
+def _cache_key(method: str, url: str, kwargs: dict) -> str:
+    payload = kwargs.get("json") if kwargs.get("json") is not None else kwargs.get("params")
+    raw = json.dumps([method.upper(), url, payload], sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> Optional[dict]:
+    with _RESPONSE_CACHE_LOCK:
+        entry = _RESPONSE_CACHE.get(key)
+        if entry is None:
+            return None
+        expiry, value = entry
+        if time.monotonic() >= expiry:
+            del _RESPONSE_CACHE[key]
+            return None
+        return value
+
+
+def _cache_put(key: str, value: dict) -> None:
+    with _RESPONSE_CACHE_LOCK:
+        _RESPONSE_CACHE[key] = (time.monotonic() + _RESPONSE_CACHE_TTL, value)
+        while len(_RESPONSE_CACHE) > _RESPONSE_CACHE_MAX_ENTRIES:
+            oldest = min(_RESPONSE_CACHE, key=lambda k: _RESPONSE_CACHE[k][0])
+            del _RESPONSE_CACHE[oldest]
+
+
+def _backoff_delay(attempt: int, retry_after: Optional[str] = None) -> float:
+    """Compute a retry delay: honour Retry-After, else exponential + jitter."""
+    if retry_after:
+        try:
+            return min(float(retry_after), 30.0)
+        except (TypeError, ValueError):
+            pass
+    base = min(2.0 ** (attempt - 1), 8.0)
+    return base * (0.5 + random.random() * 0.5)
+
+
 def _request(
     method: str,
-    endpoint: str,
+    path: str,
     *,
     timeout: float = 60.0,
     binary_ok: bool = False,
+    cacheable: bool = False,
     **kwargs: Any,
 ) -> dict:
-    """Send an HTTP request to a Cloudflare Browser Rendering endpoint.
+    """Send an HTTP request to a Cloudflare API endpoint.
 
     Args:
         method: HTTP method ('get', 'post', 'delete').
-        endpoint: API endpoint path (e.g. 'crawl').
+        path: API path relative to the account root (e.g.
+            'browser-rendering/crawl' or 'ai/run/@cf/meta/llama-3.3-70b-instruct').
         timeout: Request timeout in seconds.
         binary_ok: If True, non-JSON responses are base64-encoded instead of
             causing an error.
+        cacheable: If True, successful responses are cached for
+            ``_RESPONSE_CACHE_TTL`` seconds keyed on method+URL+payload.
         **kwargs: Forwarded to the httpx method (e.g. json=, params=).
 
     Returns:
@@ -305,58 +380,112 @@ def _request(
     if method.lower() not in _allowed_methods:
         return {"error": f"Unsupported HTTP method: {method}"}
     try:
-        client = _get_client()
-        resp = getattr(client, method.lower())(
-            _api_url(endpoint), headers=_headers(), timeout=timeout, **kwargs
-        )
-        resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
-        if "application/json" in content_type:
-            return resp.json()
-        if binary_ok:
+        url = _account_api_url(path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    key = _cache_key(method, url, kwargs) if cacheable else None
+    if key is not None:
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+
+    resp = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            client = _get_client()
+            resp = getattr(client, method.lower())(
+                url, headers=_headers(), timeout=timeout, **kwargs
+            )
+            resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            logger.error("Cloudflare API error on %s %s: %s", method.upper(), path, exc)
+            if attempt < _MAX_ATTEMPTS and (status == 429 or status >= 500):
+                delay = _backoff_delay(attempt, exc.response.headers.get("Retry-After"))
+                logger.warning(
+                    "Cloudflare returned HTTP %s — retrying in %.1fs (attempt %d/%d)",
+                    status, delay, attempt + 1, _MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+                continue
+            try:
+                detail = exc.response.text[:500]
+            except (UnicodeDecodeError, AttributeError):
+                detail = exc.response.content.decode("utf-8", errors="replace")[:500]
             return {
-                "success": True,
-                "result_base64": base64.b64encode(resp.content).decode(),
+                "error": f"Cloudflare API returned HTTP {status}",
+                "detail": detail,
             }
+        except httpx.RequestError as exc:
+            logger.error("Cloudflare request failed on %s %s: %s", method.upper(), path, exc)
+            if attempt < _MAX_ATTEMPTS:
+                delay = _backoff_delay(attempt)
+                logger.warning("Retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_ATTEMPTS)
+                time.sleep(delay)
+                continue
+            return {"error": f"Request to Cloudflare API failed: {exc}"}
+        except Exception as exc:
+            logger.error("Unexpected error on %s %s: %s", method.upper(), path, exc)
+            return {"error": f"Unexpected error: {exc}"}
+
+    assert resp is not None
+    content_type = resp.headers.get("content-type", "")
+    if "application/json" in content_type:
+        result = resp.json()
+    elif binary_ok:
+        result = {
+            "success": True,
+            "result_base64": base64.b64encode(resp.content).decode(),
+        }
+    else:
         # Non-JSON, non-binary response — try parsing, return raw on failure
         try:
-            return resp.json()
+            result = resp.json()
         except Exception:
             return {
-                "error": f"Unexpected content-type from {method.upper()} {endpoint}: {content_type}",
+                "error": f"Unexpected content-type from {method.upper()} {path}: {content_type}",
                 "raw": resp.text[:1000],
             }
-    except httpx.HTTPStatusError as exc:
-        logger.error("Cloudflare API error on %s %s: %s", method.upper(), endpoint, exc)
-        try:
-            detail = exc.response.text[:500]
-        except (UnicodeDecodeError, AttributeError):
-            detail = exc.response.content.decode("utf-8", errors="replace")[:500]
-        return {
-            "error": f"Cloudflare API returned HTTP {exc.response.status_code}",
-            "detail": detail,
-        }
-    except httpx.RequestError as exc:
-        logger.error("Cloudflare request failed on %s %s: %s", method.upper(), endpoint, exc)
-        return {"error": f"Request to Cloudflare API failed: {exc}"}
-    except Exception as exc:
-        logger.error("Unexpected error on %s %s: %s", method.upper(), endpoint, exc)
-        return {"error": f"Unexpected error: {exc}"}
+    if (
+        key is not None
+        and isinstance(result, dict)
+        and result.get("success")
+        and "error" not in result
+    ):
+        _cache_put(key, result)
+    return result
 
 
-def _post(endpoint: str, payload: dict, *, timeout: float = 120.0, binary_ok: bool = False) -> dict:
+def _post(
+    endpoint: str,
+    payload: dict,
+    *,
+    timeout: float = 120.0,
+    binary_ok: bool = False,
+    cacheable: bool = False,
+) -> dict:
     """POST to a Cloudflare Browser Rendering endpoint and return the JSON response."""
-    return _request("post", endpoint, json=payload, timeout=timeout, binary_ok=binary_ok)
+    return _request(
+        "post", f"browser-rendering/{endpoint}",
+        json=payload, timeout=timeout, binary_ok=binary_ok, cacheable=cacheable,
+    )
+
+
+def _post_account(path: str, payload: dict, *, timeout: float = 120.0) -> dict:
+    """POST to an arbitrary account-scoped Cloudflare API path (e.g. Workers AI)."""
+    return _request("post", path, json=payload, timeout=timeout)
 
 
 def _get(
     endpoint: str, params: Optional[dict] = None, *, timeout: float = 60.0
 ) -> dict:
-    return _request("get", endpoint, params=params, timeout=timeout)
+    return _request("get", f"browser-rendering/{endpoint}", params=params, timeout=timeout)
 
 
 def _delete(endpoint: str, *, timeout: float = 30.0) -> dict:
-    return _request("delete", endpoint, timeout=timeout)
+    return _request("delete", f"browser-rendering/{endpoint}", timeout=timeout)
 
 
 _BLOCKED_HEADERS = frozenset({
@@ -458,6 +587,115 @@ def _limit_binary_response(result: dict, max_chars: int = 50000) -> str:
     return _limit_response_size(serialized, max_chars)
 
 
+# ---------------------------------------------------------------------------
+# Binary output handling (local file / R2)
+# ---------------------------------------------------------------------------
+
+_R2_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$")
+
+
+def _extract_base64(result: dict) -> Optional[str]:
+    """Locate the base64-encoded binary payload inside an API response."""
+    if isinstance(result, dict):
+        value = result.get("result_base64")
+        if isinstance(value, str) and value:
+            return value
+        inner = result.get("result")
+        if isinstance(inner, str) and inner:
+            return inner
+        if isinstance(inner, dict):
+            for key in ("screenshot", "pdf"):
+                value = inner.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    return None
+
+
+def _write_output_file(output_path: str, data: bytes) -> Optional[str]:
+    """Write *data* to *output_path*. Returns an error message or None."""
+    try:
+        path = os.path.abspath(os.path.expanduser(str(output_path)))
+        if os.path.isdir(path):
+            return f"output_path is a directory: {path}"
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+    except OSError as exc:
+        return f"Failed to write output file: {exc}"
+    return None
+
+
+def _upload_to_r2(bucket: str, key: str, data: bytes, content_type: str) -> dict:
+    """Upload *data* to an R2 bucket via the Cloudflare REST API (PUT object).
+
+    Requires the API token to have Workers R2 Storage write permission.
+    """
+    if httpx is None:
+        return {"error": "httpx is not installed. Run: pip install httpx"}
+    if not isinstance(bucket, str) or not _R2_BUCKET_RE.match(bucket):
+        return {"error": f"Invalid R2 bucket name: {bucket!r}"}
+    if not isinstance(key, str) or not key or key.startswith("/") or ".." in key:
+        return {"error": f"Invalid R2 object key: {key!r}"}
+    try:
+        url = _account_api_url(f"r2/buckets/{bucket}/objects/{key}")
+        headers = _headers()
+        headers["Content-Type"] = content_type
+        resp = _get_client().put(url, content=data, headers=headers, timeout=120.0)
+        resp.raise_for_status()
+        return {"success": True}
+    except httpx.HTTPStatusError as exc:
+        try:
+            detail = exc.response.text[:300]
+        except (UnicodeDecodeError, AttributeError):
+            detail = ""
+        return {
+            "error": f"R2 upload failed: HTTP {exc.response.status_code}",
+            "detail": detail,
+        }
+    except Exception as exc:
+        logger.error("R2 upload failed: %s", exc)
+        return {"error": f"R2 upload failed: {exc}"}
+
+
+def _publish_binary(result: dict, args: dict, default_content_type: str) -> Optional[dict]:
+    """Optionally save binary API output to a local file and/or upload to R2.
+
+    Returns ``None`` if neither ``output_path`` nor ``r2_bucket``+``r2_key``
+    was requested. Otherwise returns an info dict (``saved_to``, ``r2``,
+    ``bytes``) or ``{"error": ...}`` on failure.
+    """
+    output_path = args.get("output_path")
+    r2_bucket = args.get("r2_bucket")
+    r2_key = args.get("r2_key")
+    if not output_path and not r2_bucket and not r2_key:
+        return None
+    if r2_bucket and not r2_key:
+        return {"error": "'r2_key' is required when 'r2_bucket' is set"}
+    if not isinstance(result, dict) or result.get("error"):
+        return {"error": (result or {}).get("error", "API request failed")}
+    b64 = _extract_base64(result)
+    if not b64:
+        return {"error": "No binary content found in API response to save/upload"}
+    try:
+        data = base64.b64decode(b64)
+    except Exception as exc:
+        return {"error": f"Failed to decode binary content: {exc}"}
+    info: Dict[str, Any] = {"bytes": len(data)}
+    if output_path:
+        err = _write_output_file(output_path, data)
+        if err:
+            return {"error": err}
+        info["saved_to"] = os.path.abspath(os.path.expanduser(str(output_path)))
+    if r2_bucket:
+        up = _upload_to_r2(r2_bucket, r2_key, data, default_content_type)
+        if up.get("error"):
+            return up
+        info["r2"] = {"bucket": r2_bucket, "key": r2_key}
+    return info
+
+
 def handle_cf_crawl(args: dict, **kw) -> str:
     """Start an async crawl job or check status / cancel an existing one."""
     action = args.get("action", "start")
@@ -544,7 +782,7 @@ def handle_cf_scrape(args: dict, **kw) -> str:
     elements = [{"selector": s} for s in selectors]
     payload: Dict[str, Any] = {"url": url, "elements": elements}
     payload.update(_build_common_opts(args))
-    result = _post("scrape", payload)
+    result = _post("scrape", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
 
 
@@ -561,7 +799,7 @@ def handle_cf_markdown(args: dict, **kw) -> str:
     if args.get("html"):
         payload["html"] = args["html"]
     payload.update(_build_common_opts(args))
-    result = _post("markdown", payload)
+    result = _post("markdown", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
 
 
@@ -582,7 +820,7 @@ def handle_cf_json_extract(args: dict, **kw) -> str:
     if args.get("response_format"):
         payload["response_format"] = args["response_format"]
     payload.update(_build_common_opts(args))
-    result = _post("json", payload)
+    result = _post("json", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
 
 
@@ -600,7 +838,7 @@ def handle_cf_links(args: dict, **kw) -> str:
     if args.get("exclude_external") is not None:
         payload["excludeExternalLinks"] = args["exclude_external"]
     payload.update(_build_common_opts(args))
-    result = _post("links", payload)
+    result = _post("links", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
 
 
@@ -617,7 +855,7 @@ def handle_cf_content(args: dict, **kw) -> str:
     if args.get("html"):
         payload["html"] = args["html"]
     payload.update(_build_common_opts(args))
-    result = _post("content", payload)
+    result = _post("content", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
 
 
@@ -646,19 +884,27 @@ def handle_cf_screenshot(args: dict, **kw) -> str:
     if args.get("selector"):
         payload["selector"] = args["selector"]
     payload.update(_build_common_opts(args))
-    result = _post("screenshot", payload, binary_ok=True)
+    result = _post("screenshot", payload, binary_ok=True, cacheable=True)
+    pub = _publish_binary(result, args, f"image/{args.get('image_type') or 'png'}")
+    if pub is not None:
+        if pub.get("error"):
+            return json.dumps({"success": False, "error": pub["error"]}, indent=2)
+        return json.dumps({"success": True, **pub}, indent=2)
     return _limit_binary_response(result)
 
 
 def handle_cf_pdf(args: dict, **kw) -> str:
-    """Render a web page as PDF. Returns base64-encoded PDF."""
-    url = args.get("url")
-    if not url:
-        return json.dumps({"error": "'url' is required"})
-    url_err = _validate_url(url)
-    if url_err:
-        return json.dumps({"error": url_err})
-    payload: Dict[str, Any] = {"url": url}
+    """Render a web page or raw HTML as PDF. Returns base64-encoded PDF."""
+    if not args.get("url") and not args.get("html"):
+        return json.dumps({"error": "Provide either 'url' or 'html' parameter"})
+    payload: Dict[str, Any] = {}
+    if args.get("url"):
+        url_err = _validate_url(args["url"])
+        if url_err:
+            return json.dumps({"error": url_err})
+        payload["url"] = args["url"]
+    if args.get("html"):
+        payload["html"] = args["html"]
     if args.get("pdf_options"):
         payload["pdfOptions"] = args["pdf_options"]
     if args.get("viewport"):
@@ -668,7 +914,12 @@ def handle_cf_pdf(args: dict, **kw) -> str:
     if args.get("footer_template"):
         payload["footerTemplate"] = args["footer_template"]
     payload.update(_build_common_opts(args))
-    result = _post("pdf", payload, binary_ok=True)
+    result = _post("pdf", payload, binary_ok=True, cacheable=True)
+    pub = _publish_binary(result, args, "application/pdf")
+    if pub is not None:
+        if pub.get("error"):
+            return json.dumps({"success": False, "error": pub["error"]}, indent=2)
+        return json.dumps({"success": True, **pub}, indent=2)
     return _limit_binary_response(result)
 
 
@@ -702,7 +953,12 @@ def handle_cf_snapshot(args: dict, **kw) -> str:
     if screenshot_opts:
         payload["screenshotOptions"] = screenshot_opts
     payload.update(_build_common_opts(args))
-    result = _post("snapshot", payload, binary_ok=True)
+    result = _post("snapshot", payload, binary_ok=True, cacheable=True)
+    pub = _publish_binary(result, args, "image/png")
+    if pub is not None:
+        if pub.get("error"):
+            return json.dumps({"success": False, "error": pub["error"]}, indent=2)
+        return json.dumps({"success": True, **pub}, indent=2)
     # A snapshot may embed a base64 screenshot inside JSON — never truncate
     # mid-string (breaks JSON parsing); reject with guidance instead.
     serialized = json.dumps(result, indent=2)
@@ -728,8 +984,76 @@ def handle_cf_accessibility_tree(args: dict, **kw) -> str:
         return json.dumps({"error": url_err})
     payload: Dict[str, Any] = {"url": url}
     payload.update(_build_common_opts(args))
-    result = _post("accessibilityTree", payload)
+    result = _post("accessibilityTree", payload, cacheable=True)
     return _limit_response_size(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare companion APIs (Workers AI, DNS-over-HTTPS)
+# ---------------------------------------------------------------------------
+
+_AI_DEFAULT_MODEL = "@cf/meta/llama-3.3-70b-instruct"
+_AI_MODEL_RE = re.compile(r"^[A-Za-z0-9@/._-]{1,200}$")
+
+_DOH_URL = "https://cloudflare-dns.com/dns-query"
+_DNS_RECORD_TYPES = frozenset({
+    "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "SRV", "PTR", "CAA", "HTTPS",
+})
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]{0,251}[A-Za-z0-9])?\.?$")
+
+
+def handle_cf_ai_chat(args: dict, **kw) -> str:
+    """Run a Workers AI text-generation model via the REST API."""
+    prompt = args.get("prompt")
+    messages = args.get("messages")
+    if not prompt and not messages:
+        return json.dumps({"error": "Provide either 'prompt' or 'messages'"})
+    model = args.get("model") or _AI_DEFAULT_MODEL
+    if not isinstance(model, str) or not _AI_MODEL_RE.match(model):
+        return json.dumps({"error": f"Invalid model name: {model!r}"})
+    payload: Dict[str, Any] = {}
+    if messages:
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            return json.dumps({"error": "'messages' must be a list of {role, content} objects"})
+        payload["messages"] = messages
+    else:
+        payload["prompt"] = prompt
+    if args.get("max_tokens") is not None:
+        payload["max_tokens"] = args["max_tokens"]
+    if args.get("temperature") is not None:
+        payload["temperature"] = args["temperature"]
+    result = _post_account(f"ai/run/{model}", payload)
+    return _limit_response_size(json.dumps(result, indent=2))
+
+
+def handle_cf_dns(args: dict, **kw) -> str:
+    """Resolve a DNS record via Cloudflare DNS-over-HTTPS (no auth needed)."""
+    if httpx is None:
+        return json.dumps({"error": "httpx is not installed. Run: pip install httpx"})
+    name = args.get("name")
+    if not name or not isinstance(name, str):
+        return json.dumps({"error": "'name' is required"})
+    if not _HOSTNAME_RE.match(name):
+        return json.dumps({"error": f"Invalid hostname: {name!r}"})
+    rtype = str(args.get("type") or "A").upper()
+    if rtype not in _DNS_RECORD_TYPES:
+        return json.dumps({
+            "error": (
+                f"Unsupported record type: {rtype}. "
+                f"Supported: {', '.join(sorted(_DNS_RECORD_TYPES))}"
+            )
+        })
+    try:
+        resp = _get_client().get(
+            _DOH_URL,
+            params={"name": name, "type": rtype},
+            headers={"Accept": "application/dns-json"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        return _limit_response_size(json.dumps(resp.json(), indent=2))
+    except Exception as exc:
+        return json.dumps({"error": f"DNS-over-HTTPS lookup failed: {exc}"})
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1446,21 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "URL to screenshot"},
+                    "output_path": {
+                        "type": "string",
+                        "description": (
+                            "Local file path to save the image (decoded from base64). "
+                            "When set, only the path is returned instead of the payload."
+                        ),
+                    },
+                    "r2_bucket": {
+                        "type": "string",
+                        "description": "R2 bucket to upload the image to (needs R2 write permission)",
+                    },
+                    "r2_key": {
+                        "type": "string",
+                        "description": "R2 object key for the upload (required with r2_bucket)",
+                    },
                     "full_page": {
                         "type": "boolean",
                         "description": "Capture the full scrollable page. Default: false",
@@ -1192,7 +1531,29 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to render as PDF"},
+                    "url": {
+                        "type": "string",
+                        "description": "URL to render as PDF (provide url or html)",
+                    },
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML to render as PDF instead of a URL",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": (
+                            "Local file path to save the PDF (decoded from base64). "
+                            "When set, only the path is returned instead of the payload."
+                        ),
+                    },
+                    "r2_bucket": {
+                        "type": "string",
+                        "description": "R2 bucket to upload the PDF to (needs R2 write permission)",
+                    },
+                    "r2_key": {
+                        "type": "string",
+                        "description": "R2 object key for the upload (required with r2_bucket)",
+                    },
                     "pdf_options": {
                         "type": "object",
                         "description": "PDF settings: format, margins, scale, landscape, etc.",
@@ -1232,7 +1593,7 @@ TOOLS = [
                         "description": "Additional HTTP headers to send",
                     },
                 },
-                "required": ["url"],
+                "required": [],
             },
         },
         "handler": handle_cf_pdf,
@@ -1253,6 +1614,22 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "URL to capture"},
+                    "output_path": {
+                        "type": "string",
+                        "description": (
+                            "Local file path to save the screenshot (decoded from base64). "
+                            "Requires 'screenshot' in formats. When set, only the path is "
+                            "returned instead of the payload."
+                        ),
+                    },
+                    "r2_bucket": {
+                        "type": "string",
+                        "description": "R2 bucket to upload the screenshot to (needs R2 write permission)",
+                    },
+                    "r2_key": {
+                        "type": "string",
+                        "description": "R2 object key for the upload (required with r2_bucket)",
+                    },
                     "formats": {
                         "type": "array",
                         "items": {
@@ -1345,6 +1722,83 @@ TOOLS = [
         "handler": handle_cf_accessibility_tree,
         "description": "Capture the accessibility tree of a page",
         "emoji": "🌳",
+    },
+    {
+        "name": "cf_ai_chat",
+        "schema": {
+            "name": "cf_ai_chat",
+            "description": (
+                "Cloudflare Workers AI: run a hosted text-generation model via REST. "
+                "Useful for cheap, fast inference (summarization, classification) without "
+                "consuming the main agent's context. Requires the API token to have "
+                "'Workers AI - Read' permission. Default model: "
+                "@cf/meta/llama-3.3-70b-instruct."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Single-turn prompt text",
+                    },
+                    "messages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                        },
+                        "description": "Chat-style messages (alternative to prompt)",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Workers AI model id, e.g. @cf/meta/llama-3.3-70b-instruct "
+                            "(default) or @cf/meta/llama-3.1-8b-instruct"
+                        ),
+                    },
+                    "max_tokens": {"type": "integer"},
+                    "temperature": {"type": "number"},
+                },
+            },
+        },
+        "handler": handle_cf_ai_chat,
+        "description": "Run Workers AI text-generation models via REST",
+        "emoji": "🤖",
+    },
+    {
+        "name": "cf_dns",
+        "schema": {
+            "name": "cf_dns",
+            "description": (
+                "Resolve DNS records using Cloudflare's public DNS-over-HTTPS resolver. "
+                "No API credentials needed. Supports A, AAAA, CNAME, MX, TXT, NS, SOA, "
+                "SRV, PTR, CAA and HTTPS record types."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Domain name to resolve, e.g. example.com",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "A", "AAAA", "CNAME", "MX", "TXT", "NS",
+                            "SOA", "SRV", "PTR", "CAA", "HTTPS",
+                        ],
+                        "description": "DNS record type (default: A)",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+        "handler": handle_cf_dns,
+        "description": "DNS-over-HTTPS record lookups (no auth needed)",
+        "emoji": "🌍",
     },
 ]
 

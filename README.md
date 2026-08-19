@@ -18,6 +18,24 @@ Cloudflare Browser Rendering plugin for [hermes-agent](https://github.com/NousRe
 | `cf_pdf` | Page-to-PDF with headers/footers, margins, scale |
 | `cf_snapshot` | Multiple formats (HTML, screenshot, Markdown, a11y tree) in a single request |
 | `cf_accessibility_tree` | Accessibility tree of a page (roles, names, values) after JS execution |
+| `cf_ai_chat` | Workers AI text generation via REST (Llama models; needs "Workers AI - Read" token permission) |
+| `cf_dns` | DNS-over-HTTPS record lookups (A, AAAA, MX, TXT, …) — no credentials needed |
+
+### Saving binary output
+
+Screenshots and PDFs can exceed the inline response limit. Instead of returning
+base64, save them directly:
+
+- `output_path` — write the decoded file locally (supported by `cf_screenshot`, `cf_pdf`, `cf_snapshot`)
+- `r2_bucket` + `r2_key` — upload to an R2 bucket (requires "Workers R2 Storage - Edit" token permission)
+
+`cf_pdf` also accepts raw `html` instead of a `url` for generating PDFs from custom HTML/CSS.
+
+### Reliability
+
+Read endpoints are cached for 5 minutes (renders are billed per browser-second),
+and requests are automatically retried with backoff on rate limits (429) and
+transient server errors (5xx).
 
 ## Installation
 
@@ -49,6 +67,7 @@ export CLOUDFLARE_ACCOUNT_ID="your-account-id"
 
 1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
 2. Create a token with **Browser Rendering - Edit** permission
+   (add **Workers AI - Read** for `cf_ai_chat` and **Workers R2 Storage - Edit** for R2 uploads)
 3. Copy your Account ID from the dashboard sidebar
 
 ## Usage examples
@@ -75,6 +94,12 @@ Once installed, hermes-agent can use the tools directly:
 
 **Inspect page structure:**
 > Show me the accessibility tree of https://app.example.com so I can see the interactive elements
+
+**Save a PDF of a page:**
+> Render https://example.com/report as a PDF and save it to /tmp/report.pdf
+
+**Resolve a DNS record:**
+> What are the MX records for example.com?
 
 ## Requirements
 
