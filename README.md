@@ -2,6 +2,8 @@
 
 Cloudflare Browser Rendering plugin for [hermes-agent](https://github.com/NousResearch/hermes-agent) — crawl, scrape, and extract content from web pages using Cloudflare's headless browser API.
 
+> ℹ️ Cloudflare has renamed Browser Rendering to **Browser Run** — same API, endpoints unchanged.
+
 ## Tools
 
 | Tool | Description |
@@ -14,6 +16,8 @@ Cloudflare Browser Rendering plugin for [hermes-agent](https://github.com/NousRe
 | `cf_content` | Fully rendered HTML after JavaScript execution |
 | `cf_screenshot` | Page screenshots (full-page, element, viewport control, PNG/JPEG/WebP) |
 | `cf_pdf` | Page-to-PDF with headers/footers, margins, scale |
+| `cf_snapshot` | Multiple formats (HTML, screenshot, Markdown, a11y tree) in a single request |
+| `cf_accessibility_tree` | Accessibility tree of a page (roles, names, values) after JS execution |
 
 ## Installation
 
@@ -65,6 +69,12 @@ Once installed, hermes-agent can use the tools directly:
 
 **Take a screenshot:**
 > Take a full-page screenshot of https://example.com
+
+**Capture multiple formats at once:**
+> Get the Markdown, screenshot, and accessibility tree of https://example.com in one request
+
+**Inspect page structure:**
+> Show me the accessibility tree of https://app.example.com so I can see the interactive elements
 
 ## Requirements
 

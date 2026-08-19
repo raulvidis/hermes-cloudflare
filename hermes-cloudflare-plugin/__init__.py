@@ -672,6 +672,66 @@ def handle_cf_pdf(args: dict, **kw) -> str:
     return _limit_binary_response(result)
 
 
+def handle_cf_snapshot(args: dict, **kw) -> str:
+    """Capture multiple page formats (HTML, screenshot, markdown, a11y tree) in one request."""
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
+    payload: Dict[str, Any] = {"url": url}
+    if args.get("formats"):
+        valid_formats = {"content", "screenshot", "markdown", "accessibilityTree"}
+        invalid = set(args["formats"]) - valid_formats
+        if invalid:
+            return json.dumps({
+                "error": (
+                    f"Invalid formats: {sorted(invalid)}. "
+                    "Valid: content, screenshot, markdown, accessibilityTree"
+                )
+            })
+        payload["formats"] = args["formats"]
+    screenshot_opts: Dict[str, Any] = {}
+    if args.get("full_page") is not None:
+        screenshot_opts["fullPage"] = args["full_page"]
+    if args.get("image_type"):
+        screenshot_opts["type"] = args["image_type"]
+    if args.get("quality") is not None:
+        screenshot_opts["quality"] = args["quality"]
+    if screenshot_opts:
+        payload["screenshotOptions"] = screenshot_opts
+    payload.update(_build_common_opts(args))
+    result = _post("snapshot", payload, binary_ok=True)
+    # A snapshot may embed a base64 screenshot inside JSON — never truncate
+    # mid-string (breaks JSON parsing); reject with guidance instead.
+    serialized = json.dumps(result, indent=2)
+    if len(serialized) > 50000 and result.get("success") is not False:
+        return json.dumps({
+            "success": False,
+            "error": (
+                f"Snapshot response too large ({len(serialized):,} chars), likely due to an "
+                "embedded base64 screenshot. Drop 'screenshot' from formats, or call "
+                "cf_screenshot and cf_content separately."
+            ),
+        }, indent=2)
+    return serialized
+
+
+def handle_cf_accessibility_tree(args: dict, **kw) -> str:
+    """Capture the accessibility tree of a page after JS execution."""
+    url = args.get("url")
+    if not url:
+        return json.dumps({"error": "'url' is required"})
+    url_err = _validate_url(url)
+    if url_err:
+        return json.dumps({"error": url_err})
+    payload: Dict[str, Any] = {"url": url}
+    payload.update(_build_common_opts(args))
+    result = _post("accessibilityTree", payload)
+    return _limit_response_size(json.dumps(result, indent=2))
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas (OpenAI function-calling format)
 # ---------------------------------------------------------------------------
@@ -1178,6 +1238,113 @@ TOOLS = [
         "handler": handle_cf_pdf,
         "description": "Render web pages as PDF documents",
         "emoji": "📄",
+    },
+    {
+        "name": "cf_snapshot",
+        "schema": {
+            "name": "cf_snapshot",
+            "description": (
+                "Cloudflare Browser Rendering: capture multiple page formats in a single "
+                "request. Combines HTML content, screenshot, Markdown, and the accessibility "
+                "tree — use instead of calling cf_content/cf_screenshot/cf_markdown separately "
+                "when you need more than one representation of the same page."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to capture"},
+                    "formats": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["content", "screenshot", "markdown", "accessibilityTree"],
+                        },
+                        "description": (
+                            "Formats to include. Default: [content, screenshot]"
+                        ),
+                    },
+                    "full_page": {
+                        "type": "boolean",
+                        "description": "Screenshot the full scrollable page",
+                    },
+                    "image_type": {
+                        "type": "string",
+                        "enum": ["png", "jpeg", "webp"],
+                    },
+                    "quality": {
+                        "type": "integer",
+                        "description": "Screenshot quality 0-100 (jpeg/webp only)",
+                    },
+                    "wait_until": {
+                        "type": "string",
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
+                    },
+                    "user_agent": {"type": "string"},
+                    "wait_for_selector": {"type": "string"},
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+        "handler": handle_cf_snapshot,
+        "description": "Capture HTML, screenshot, Markdown and a11y tree in one request",
+        "emoji": "🪞",
+    },
+    {
+        "name": "cf_accessibility_tree",
+        "schema": {
+            "name": "cf_accessibility_tree",
+            "description": (
+                "Cloudflare Browser Rendering: capture the accessibility tree of a page "
+                "after JavaScript execution. Returns a structured tree of roles, names and "
+                "values — useful for understanding page structure and interactive elements "
+                "without parsing raw HTML."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to capture the accessibility tree from",
+                    },
+                    "wait_until": {
+                        "type": "string",
+                        "enum": [
+                            "networkidle0",
+                            "networkidle2",
+                            "load",
+                            "domcontentloaded",
+                        ],
+                    },
+                    "user_agent": {"type": "string"},
+                    "wait_for_selector": {"type": "string"},
+                    "reject_resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "extra_headers": {
+                        "type": "object",
+                        "description": "Additional HTTP headers to send",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+        "handler": handle_cf_accessibility_tree,
+        "description": "Capture the accessibility tree of a page",
+        "emoji": "🌳",
     },
 ]
 
